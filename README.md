@@ -15,7 +15,7 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 - **Sertifikat** (PNG): ism, ball, foiz, yakunlangan testda — egallagan o'rin.
 - **Muallif paneli**: natijalar, Excel hisobot (reyting + har bir savol tahlili), kalit, ulashish, yakunlash, o'chirish.
 - **Majburiy obuna**: bir yoki bir nechta kanal, admin paneldan boshqariladi.
-- **Admin panel**: statistika, barchaga xabar tarqatish, kanallar, foydalanuvchini bloklash.
+- **Admin panel**: kengaytirilgan statistika (umumiy, 7 kunlik dinamika, eng faollar, foydalanuvchilar ro'yxati Excel'da), barchaga xabar tarqatish, kanallar, foydalanuvchini bloklash.
 - **Nomaqbul ismlardan himoya** (uch qatlam):
   1. Avtomatik filtr: ism-familiya va test nomlarida so'kinish so'zlari (o'zbek, rus, ingliz; kirill/lotin, bo'shliq yoki belgi bilan yozilgani ham). Admin qo'shimcha so'z kirita oladi.
   2. Test muallifi: «👥 Ishtirokchilar» bo'limida istalgan ishtirokchini reytingdan chiqaradi yoki adminga shikoyat yuboradi.

@@ -529,7 +529,17 @@ async def scenario():
 
     # --- admin: statistika, bloklash, tarqatish, begona admin panelga kira olmaydi
     out = await cb(ADMIN, "adm:stats")
-    assert "Foydalanuvchilar: <b>6</b>" in out, out
+    assert "Foydalanuvchilar: 6</b>" in out and "ro'yxatdan o'tgan: 6" in out, out
+    assert "bugun <b>+6</b>" in out and "Faol: bugun <b>6</b>" in out, out
+    assert "Testlar: 1</b>" in out and "Yuborilgan javoblar: 1</b>" in out and "o'rtacha natija: 75%" in out, out
+    out = await cb(ADMIN, "adm:stats:week")
+    assert "Oxirgi 7 kun" in out and "Jami       6     1      1" in out, out
+    out = await cb(ADMIN, "adm:stats:top")
+    assert "Tezkor test" in out and "Ustoz Karimov — 1 ta test, <b>1</b> ishtirokchi" in out, out
+    assert "Aliyev Vali — <b>1</b> ta test, o'rtacha 75%" in out, out
+    start = len(session.calls)
+    await cb(ADMIN, "adm:users_xl")
+    assert "SendDocument" in names(start) and "6 nafar" in texts(start), names(start)
     start = len(session.calls)
     await cb(S1, "adm:stats")
     out = await msg(S1, "/admin")

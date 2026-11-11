@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS users (
     full_name   TEXT,
     joined_at   TEXT NOT NULL,
     is_blocked  INTEGER NOT NULL DEFAULT 0,
-    is_active   INTEGER NOT NULL DEFAULT 1
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    last_seen   TEXT
 );
 CREATE TABLE IF NOT EXISTS channels (
     id       {PK},
@@ -77,6 +78,11 @@ CREATE TABLE IF NOT EXISTS fsm (
     updated_at  TEXT NOT NULL
 );
 """
+# Jadval yaratilgandan keyin qo'shilgan ustunlar: (jadval, ustun, turi) - eski bazalarga avtomatik qo'shiladi
+_NEW_COLUMNS = [
+    ("submissions", "is_hidden", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "last_seen", "TEXT"),
+]
 _SQLITE_TYPES = {"PK": "INTEGER PRIMARY KEY AUTOINCREMENT", "BIG": "INTEGER", "REAL": "REAL"}
 _PG_TYPES = {"PK": "BIGSERIAL PRIMARY KEY", "BIG": "BIGINT", "REAL": "DOUBLE PRECISION"}
 
@@ -126,9 +132,8 @@ async def init(target: Path | str) -> None:
         async with _pool.acquire() as conn:
             await conn.execute(SCHEMA.format(**_PG_TYPES))
             # Eski bazalar uchun yangi ustunlar
-            await conn.execute(
-                "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS is_hidden INTEGER NOT NULL DEFAULT 0"
-            )
+            for table, column, ddl in _NEW_COLUMNS:
+                await conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
         log.info("Baza: PostgreSQL")
         return
     path = Path(target)
@@ -138,10 +143,11 @@ async def init(target: Path | str) -> None:
     await _conn.execute("PRAGMA journal_mode=WAL")
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA.format(**_SQLITE_TYPES))
-    async with _conn.execute("PRAGMA table_info(submissions)") as cur:  # eski bazalar uchun yangi ustunlar
-        columns = {row["name"] for row in await cur.fetchall()}
-    if "is_hidden" not in columns:
-        await _conn.execute("ALTER TABLE submissions ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0")
+    for table, column, ddl in _NEW_COLUMNS:  # eski bazalar uchun yangi ustunlar
+        async with _conn.execute(f"PRAGMA table_info({table})") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if column not in columns:
+            await _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     await _conn.commit()
     log.info("Baza: SQLite (%s)", path)
 
@@ -214,17 +220,24 @@ async def get_user(user_id: int):
 
 
 async def touch_user(user_id: int, username: str | None, tg_name: str):
-    """Foydalanuvchini bazaga qo'shadi yoki ma'lumotini yangilaydi; qatorni qaytaradi."""
+    """Foydalanuvchini bazaga qo'shadi yoki ma'lumotini yangilaydi; qatorni qaytaradi.
+
+    last_seen (oxirgi faollik) soatiga ko'pi bilan bir marta yoziladi - bazani ortiqcha yuklamaslik uchun.
+    """
+    now = now_utc()
     row = await get_user(user_id)
     if row is None:
         await _exec(
-            "INSERT INTO users(id, username, tg_name, joined_at) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING",
-            (user_id, username, tg_name, now_utc()),
+            "INSERT INTO users(id, username, tg_name, joined_at, last_seen) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(id) DO NOTHING",
+            (user_id, username, tg_name, now, now),
         )
         return await get_user(user_id)
-    if row["username"] != username or row["tg_name"] != tg_name or not row["is_active"]:
+    stale = (row["last_seen"] or "")[:13] != now[:13]
+    if stale or row["username"] != username or row["tg_name"] != tg_name or not row["is_active"]:
         await _exec(
-            "UPDATE users SET username=?, tg_name=?, is_active=1 WHERE id=?", (username, tg_name, user_id)
+            "UPDATE users SET username=?, tg_name=?, is_active=1, last_seen=? WHERE id=?",
+            (username, tg_name, now, user_id),
         )
         return await get_user(user_id)
     return row
@@ -247,23 +260,90 @@ async def all_user_ids() -> list[int]:
     return [r["id"] for r in rows]
 
 
-async def stats() -> dict:
-    today = now_utc()[:10]
+async def stats(day: str, week: str, month: str) -> dict:
+    """Umumiy ko'rsatkichlar. day/week/month - davr boshlanishi (UTC satr)."""
+    periods = (("d", day), ("w", week), ("m", month))
+    parts, params = [], []
+    for table, column, prefix in (
+        ("users", "joined_at", "users_new"),
+        ("users", "last_seen", "users_seen"),
+        ("tests", "created_at", "tests_new"),
+        ("submissions", "submitted_at", "subs_new"),
+    ):
+        for suffix, start in periods:
+            parts.append(f"(SELECT COUNT(*) FROM {table} WHERE {column} >= ?) AS {prefix}_{suffix}")
+            params.append(start)
     row = await _one(
-        """SELECT
+        f"""SELECT
             (SELECT COUNT(*) FROM users) AS users,
-            (SELECT COUNT(*) FROM users WHERE is_active=1 AND is_blocked=0) AS active_users,
-            (SELECT COUNT(*) FROM users WHERE joined_at >= ?) AS users_today,
+            (SELECT COUNT(*) FROM users WHERE full_name IS NOT NULL) AS registered,
+            (SELECT COUNT(*) FROM users WHERE is_active=0) AS stopped,
             (SELECT COUNT(*) FROM users WHERE is_blocked=1) AS blocked,
             (SELECT COUNT(*) FROM tests) AS tests,
             (SELECT COUNT(*) FROM tests WHERE is_active=1) AS active_tests,
-            (SELECT COUNT(*) FROM tests WHERE created_at >= ?) AS tests_today,
+            (SELECT COUNT(DISTINCT owner_id) FROM tests) AS authors,
             (SELECT COUNT(*) FROM submissions) AS subs,
-            (SELECT COUNT(*) FROM submissions WHERE submitted_at >= ?) AS subs_today
+            (SELECT COUNT(DISTINCT user_id) FROM submissions) AS solvers,
+            (SELECT COUNT(*) FROM submissions WHERE is_hidden<>0) AS hidden,
+            (SELECT AVG(score * 100.0 / max_score) FROM submissions WHERE max_score > 0) AS avg_percent,
+            (SELECT COUNT(*) FROM channels) AS channels,
+            {", ".join(parts)}
         """,
-        (today, today, today),
+        tuple(params),
     )
     return dict(row)
+
+
+async def daily_counts(table: str, column: str, bounds: list[str]) -> list[int]:
+    """Har bir [bounds[i], bounds[i+1]) oralig'idagi yozuvlar soni (kunlik dinamika uchun)."""
+    assert (table, column) in {("users", "joined_at"), ("submissions", "submitted_at"), ("tests", "created_at")}
+    parts, params = [], []
+    for i in range(len(bounds) - 1):
+        parts.append(f"COALESCE(SUM(CASE WHEN {column} >= ? AND {column} < ? THEN 1 ELSE 0 END), 0) AS c{i}")
+        params += [bounds[i], bounds[i + 1]]
+    row = await _one(f"SELECT {', '.join(parts)} FROM {table} WHERE {column} >= ?", (*params, bounds[0]))
+    return [int(row[f"c{i}"]) for i in range(len(bounds) - 1)]
+
+
+async def top_tests(limit: int) -> list:
+    return await _all(
+        """SELECT t.id, t.title, t.code, t.is_active, COUNT(s.id) AS participants
+           FROM tests t LEFT JOIN submissions s ON s.test_id=t.id
+           GROUP BY t.id, t.title, t.code, t.is_active
+           ORDER BY COUNT(s.id) DESC, t.id DESC LIMIT ?""",
+        (limit,),
+    )
+
+
+async def top_authors(limit: int) -> list:
+    return await _all(
+        """SELECT u.id, u.full_name, COUNT(DISTINCT t.id) AS tests, COUNT(s.id) AS participants
+           FROM tests t JOIN users u ON u.id=t.owner_id LEFT JOIN submissions s ON s.test_id=t.id
+           GROUP BY u.id, u.full_name
+           ORDER BY COUNT(s.id) DESC, COUNT(DISTINCT t.id) DESC LIMIT ?""",
+        (limit,),
+    )
+
+
+async def top_solvers(limit: int) -> list:
+    return await _all(
+        """SELECT u.id, u.full_name, COUNT(s.id) AS solved, AVG(s.score * 100.0 / s.max_score) AS avg_percent
+           FROM submissions s JOIN users u ON u.id=s.user_id
+           WHERE s.max_score > 0 AND s.is_hidden=0
+           GROUP BY u.id, u.full_name
+           ORDER BY COUNT(s.id) DESC, AVG(s.score * 100.0 / s.max_score) DESC LIMIT ?""",
+        (limit,),
+    )
+
+
+async def users_export(limit: int = 50_000) -> list:
+    return await _all(
+        """SELECT u.*,
+                  (SELECT COUNT(*) FROM tests t WHERE t.owner_id=u.id) AS tests_count,
+                  (SELECT COUNT(*) FROM submissions s WHERE s.user_id=u.id) AS subs_count
+           FROM users u ORDER BY u.joined_at, u.id LIMIT ?""",
+        (limit,),
+    )
 
 
 # ---------------------------------------------------------------- channels

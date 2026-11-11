@@ -53,6 +53,12 @@ def parse_local_deadline(text: str) -> str | None:
     return None
 
 
+def local_day_start(days_ago: int = 0) -> str:
+    """Mahalliy vaqt bo'yicha (bugun - days_ago) kunining boshlanishi, UTC satr ko'rinishida."""
+    midnight = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_ago)
+    return midnight.astimezone(timezone.utc).strftime(db.TIME_FMT)
+
+
 def deadline_in(minutes: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).strftime(db.TIME_FMT)
 

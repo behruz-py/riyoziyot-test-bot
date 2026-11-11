@@ -102,3 +102,33 @@ def build_report(test: dict, subs: list[dict]) -> bytes:
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_users_report(users: list[dict]) -> bytes:
+    """Admin uchun foydalanuvchilar ro'yxati."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Foydalanuvchilar"
+    _header(ws, ["№", "ID", "Ism familiya", "Telegram nomi", "Username", "Qo'shilgan", "Oxirgi faollik",
+                 "Yaratgan testlari", "Ishlagan testlari", "Holati"])
+    for i, u in enumerate(users, start=1):
+        if u["is_blocked"]:
+            status = "Bloklangan"
+        elif not u["is_active"]:
+            status = "Botni to'xtatgan"
+        elif not u["full_name"]:
+            status = "Ro'yxatdan o'tmagan"
+        else:
+            status = "Faol"
+        ws.append([
+            i, u["id"], _safe(u["full_name"] or ""), _safe(u["tg_name"] or ""),
+            f"@{u['username']}" if u["username"] else "", to_local(u["joined_at"]), to_local(u["last_seen"]),
+            u["tests_count"], u["subs_count"], status,
+        ])
+        if status != "Faol":
+            ws.cell(row=ws.max_row, column=10).fill = _RED if u["is_blocked"] else _GRAY
+    for col, width in zip("ABCDEFGHIJ", (6, 14, 30, 26, 20, 18, 18, 17, 17, 20)):
+        ws.column_dimensions[col].width = width
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

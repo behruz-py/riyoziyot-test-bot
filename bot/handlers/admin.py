@@ -11,11 +11,13 @@ from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, Telegra
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import db, moderation, services, subscription
-from ..config import ADMIN_IDS, is_admin
+from datetime import datetime, timedelta
+
+from .. import db, keyparser as kp, moderation, services, subscription
+from ..config import ADMIN_IDS, TZ, is_admin
 from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, home_btn, main_menu
 
 log = logging.getLogger(__name__)
@@ -59,25 +61,119 @@ async def panel_cb(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+# ---------------------------------------------------------------- statistika
+def _stats_kb(current: str) -> InlineKeyboardMarkup:
+    tabs = [("adm:stats", "📊 Umumiy"), ("adm:stats:week", "📈 7 kun"), ("adm:stats:top", "🏆 Eng faollar")]
+    kb = InlineKeyboardBuilder()
+    kb.row(*[
+        InlineKeyboardButton(text=("• " + title + " •") if data == current else title, callback_data=data)
+        for data, title in tabs
+    ])
+    kb.row(InlineKeyboardButton(text="📥 Foydalanuvchilar ro'yxati (Excel)", callback_data="adm:users_xl"))
+    kb.row(InlineKeyboardButton(text="🔄 Yangilash", callback_data=current),
+           InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel"))
+    return kb.as_markup()
+
+
+def _now_label() -> str:
+    return datetime.now(TZ).strftime("%d.%m.%Y %H:%M")
+
+
 @router.callback_query(F.data == "adm:stats")
 async def stats(callback: CallbackQuery) -> None:
-    s = await db.stats()
-    back = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 Yangilash", callback_data="adm:stats"),
-        InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel"),
-    ]])
-    await services.edit_or_send(
-        callback,
-        "📊 <b>Statistika</b>\n\n"
-        f"👥 Foydalanuvchilar: <b>{s['users']}</b> (bugun: +{s['users_today']})\n"
-        f"   faol: {s['active_users']} · bloklangan: {s['blocked']}\n\n"
-        f"📋 Testlar: <b>{s['tests']}</b> (bugun: +{s['tests_today']})\n"
-        f"   faol: {s['active_tests']}\n\n"
-        f"✅ Yuborilgan javoblar: <b>{s['subs']}</b> (bugun: +{s['subs_today']})\n\n"
-        "<i>«Bugun» — UTC bo'yicha sutka.</i>",
-        back,
+    s = await db.stats(services.local_day_start(0), services.local_day_start(6), services.local_day_start(29))
+    avg = kp.fmt_num(round(s["avg_percent"], 1)) if s["avg_percent"] is not None else "—"
+    text = (
+        f"📊 <b>Statistika</b> · {_now_label()}\n\n"
+        f"👥 <b>Foydalanuvchilar: {s['users']}</b>\n"
+        f"   ro'yxatdan o'tgan: {s['registered']} · botni to'xtatgan: {s['stopped']} · "
+        f"bloklangan: {s['blocked']}\n"
+        f"   🆕 Yangi: bugun <b>+{s['users_new_d']}</b> · 7 kun <b>+{s['users_new_w']}</b> · "
+        f"30 kun <b>+{s['users_new_m']}</b>\n"
+        f"   🔥 Faol: bugun <b>{s['users_seen_d']}</b> · 7 kun <b>{s['users_seen_w']}</b> · "
+        f"30 kun <b>{s['users_seen_m']}</b>\n\n"
+        f"📋 <b>Testlar: {s['tests']}</b>\n"
+        f"   faol: {s['active_tests']} · yakunlangan: {s['tests'] - s['active_tests']} · "
+        f"mualliflar: {s['authors']}\n"
+        f"   🆕 Yangi: bugun <b>+{s['tests_new_d']}</b> · 7 kun <b>+{s['tests_new_w']}</b> · "
+        f"30 kun <b>+{s['tests_new_m']}</b>\n\n"
+        f"✅ <b>Yuborilgan javoblar: {s['subs']}</b>\n"
+        f"   ishtirokchilar: {s['solvers']} · o'rtacha natija: {avg}% · reytingdan chiqarilgan: {s['hidden']}\n"
+        f"   🆕 Yangi: bugun <b>+{s['subs_new_d']}</b> · 7 kun <b>+{s['subs_new_w']}</b> · "
+        f"30 kun <b>+{s['subs_new_m']}</b>\n\n"
+        f"📡 Majburiy kanallar: {s['channels']}\n\n"
+        "<i>«Bugun» — Toshkent vaqti bilan soat 00:00 dan. «Faol» — shu davrda botga kamida bir marta "
+        "yozgan foydalanuvchilar.</i>"
     )
+    await services.edit_or_send(callback, text, _stats_kb("adm:stats"))
     await callback.answer()
+
+
+@router.callback_query(F.data == "adm:stats:week")
+async def stats_week(callback: CallbackQuery) -> None:
+    days = 7
+    bounds = [services.local_day_start(i) for i in range(days - 1, -2, -1)]  # 6 kun oldin ... ertaga
+    users = await db.daily_counts("users", "joined_at", bounds)
+    subs = await db.daily_counts("submissions", "submitted_at", bounds)
+    tests = await db.daily_counts("tests", "created_at", bounds)
+    today = datetime.now(TZ).date()
+    peak = max(subs) or 1
+    rows = ["Kun    Yangi  Test  Javob", "─" * 34]
+    for i in range(days):
+        day = today - timedelta(days=days - 1 - i)
+        bar = "▇" * round(subs[i] * 8 / peak)
+        rows.append(f"{day:%d.%m}  {users[i]:>5} {tests[i]:>5} {subs[i]:>6}  {bar}")
+    rows += ["─" * 34, f"Jami   {sum(users):>5} {sum(tests):>5} {sum(subs):>6}"]
+    text = (
+        f"📈 <b>Oxirgi 7 kun</b> · {_now_label()}\n\n"
+        "<pre>" + "\n".join(rows) + "</pre>\n\n"
+        "<i>Yangi — qo'shilgan foydalanuvchilar · Test — yaratilgan testlar · Javob — yuborilgan javoblar. "
+        "Ustunchalar javoblar sonini ko'rsatadi.</i>"
+    )
+    await services.edit_or_send(callback, text, _stats_kb("adm:stats:week"))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:stats:top")
+async def stats_top(callback: CallbackQuery) -> None:
+    lines = [f"🏆 <b>Eng faollar</b> · {_now_label()}", "", "📋 <b>Eng ko'p ishtirokchili testlar</b>"]
+    tests = [t for t in await db.top_tests(5) if t["participants"]]
+    for i, t in enumerate(tests, start=1):
+        mark = "🟢" if t["is_active"] else "🔴"
+        lines.append(f"{i}. {mark} {escape(t['title'][:40])} (<code>{t['code']}</code>) — <b>{t['participants']}</b> nafar")
+    if not tests:
+        lines.append("Hozircha ma'lumot yo'q.")
+    lines += ["", "👨‍🏫 <b>Eng faol mualliflar</b>"]
+    authors = await db.top_authors(5)
+    for i, a in enumerate(authors, start=1):
+        name = escape(a["full_name"] or f"ID {a['id']}")
+        lines.append(f"{i}. {name} — {a['tests']} ta test, <b>{a['participants']}</b> ishtirokchi")
+    if not authors:
+        lines.append("Hozircha ma'lumot yo'q.")
+    lines += ["", "🧑‍🎓 <b>Eng ko'p test ishlaganlar</b>"]
+    solvers = await db.top_solvers(5)
+    for i, u in enumerate(solvers, start=1):
+        name = escape(u["full_name"] or f"ID {u['id']}")
+        lines.append(f"{i}. {name} — <b>{u['solved']}</b> ta test, o'rtacha {kp.fmt_num(round(u['avg_percent'], 1))}%")
+    if not solvers:
+        lines.append("Hozircha ma'lumot yo'q.")
+    await services.edit_or_send(callback, "\n".join(lines), _stats_kb("adm:stats:top"))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:users_xl")
+async def users_excel(callback: CallbackQuery) -> None:
+    await callback.answer("📥 Ro'yxat tayyorlanmoqda…")
+    await callback.bot.send_chat_action(callback.from_user.id, "upload_document")
+    from ..excel import build_users_report
+
+    users = [dict(u) for u in await db.users_export()]
+    data = await asyncio.to_thread(build_users_report, users)
+    await callback.bot.send_document(
+        callback.from_user.id,
+        BufferedInputFile(data, filename=f"foydalanuvchilar_{datetime.now(TZ):%Y-%m-%d}.xlsx"),
+        caption=f"📥 Foydalanuvchilar ro'yxati — {len(users)} nafar",
+    )
 
 
 # ---------------------------------------------------------------- xabar tarqatish
