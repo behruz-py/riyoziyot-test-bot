@@ -412,6 +412,7 @@ STATE_HINTS = {
     "Admin:channel": "kanal username'i, ID raqami yoki kanaldan forward qilingan postni yuboring",
     "Admin:block": "foydalanuvchining ID raqamini yuboring",
     "Admin:badword": "taqiqlanadigan so'zni <b>matn</b> ko'rinishida yuboring",
+    "Admin:addadmin": "yangi adminning ID raqamini yuboring yoki uning xabarini forward qiling",
 }
 
 

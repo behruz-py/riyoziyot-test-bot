@@ -15,7 +15,7 @@ from pathlib import Path
 from . import config, db
 
 # Tartib muhim: submissions tests ga bog'langan. fsm (yarim qolgan amallar) nusxaga kirmaydi.
-TABLES = ["users", "channels", "tests", "submissions", "banned_words", "settings"]
+TABLES = ["users", "channels", "tests", "submissions", "banned_words", "admins", "settings"]
 _SERIAL_TABLES = ["channels", "tests", "submissions"]  # id ustuni avtomatik o'sadigan jadvallar
 FORMAT_VERSION = 1
 
@@ -44,7 +44,7 @@ async def restore(data: bytes) -> dict[str, int]:
 
     counts = {}
     for name in TABLES:
-        rows = payload["tables"].get(name, [])
+        rows = payload["tables"].get(name, [])  # eski nusxada bu jadval bo'lmasligi mumkin
         for row in rows:
             columns = list(row)
             await db._exec(

@@ -19,7 +19,7 @@ from aiogram.types import (  # noqa: E402
     CallbackQuery, Chat, ChatMemberAdministrator, ChatMemberLeft, ChatMemberMember, Message, Update, User,
 )
 
-from bot import backup, config, daily, db, keyboards as kb, services, subscription  # noqa: E402
+from bot import admins, backup, config, daily, db, keyboards as kb, services, subscription  # noqa: E402
 from bot.__main__ import build_dispatcher  # noqa: E402
 from bot.handlers import admin as admin_h, create as create_h, mytests as mytests_h  # noqa: E402
 from bot.handlers import solve as solve_h, start as start_h  # noqa: E402
@@ -627,6 +627,43 @@ async def scenario():
     await cb(ADMIN, "adm:unpinok")
     await asyncio.sleep(1.0)
     assert names(start).count("UnpinChatMessage") == 5 and "Tekshirildi: 5" in texts(start), names(start)
+
+    # --- adminlarni bot ichidan boshqarish
+    out = await cb(ADMIN, "adm:admins")
+    assert "👑 Admin Adminov" in out and "adm:admadd" in last_markup_data(), out
+    await cb(ADMIN, "adm:admadd")
+    out = await msg(ADMIN, "abc")
+    assert "faqat raqamlardan" in out, out
+    out = await msg(ADMIN, "555")
+    assert "hali kirmagan" in out, out
+    out = await msg(ADMIN, "1")
+    assert "allaqachon admin" in out, out
+    out = await msg(ADMIN, str(S2))
+    assert "admin etib tayinlandi" in out and "Siz admin etib tayinlandingiz" in out, out
+    assert config.is_admin(S2) and f"adm:admdel:{S2}" in last_markup_data()
+    out = await msg(S2, kb.BTN_ADMIN)  # yangi admin panelga kira oladi
+    assert "Admin panel" in out, out
+    out = await cb(S2, "adm:stats")
+    assert "Statistika" in out
+    out = await cb(S2, "adm:admins")  # ...lekin adminlarni boshqara olmaydi
+    assert "faqat bosh adminga" in out and "adm:admadd" not in last_markup_data(), out
+    start = len(session.calls)
+    await cb(S2, "adm:admadd")
+    await cb(S2, f"adm:admdelok:{ADMIN}")
+    await cb(S2, f"adm:admdelok:{S2}")
+    assert config.is_admin(ADMIN) and config.is_admin(S2) and "SendMessage" not in names(start)
+    await cb(ADMIN, f"adm:admdelok:{ADMIN}")  # bosh admin o'zini ham o'chira olmaydi
+    assert config.is_admin(ADMIN)
+    await admins.load()  # qayta ishga tushganda bazadan tiklanadi
+    assert config.ADMIN_IDS == {ADMIN, S2}, config.ADMIN_IDS
+    out = await cb(ADMIN, f"adm:admdel:{S2}")
+    assert "adminlikdan olinsinmi" in out
+    out = await cb(ADMIN, f"adm:admdelok:{S2}")
+    assert "endi admin emassiz" in out and not config.is_admin(S2), out
+    out = await msg(S2, kb.BTN_ADMIN)
+    assert "Admin panel" not in out, out
+    await admins.load()
+    assert config.ADMIN_IDS == {ADMIN}
 
     # --- kanal o'chirilgach obuna talab qilinmaydi
     session.subscribed.discard(S3)

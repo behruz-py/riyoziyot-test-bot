@@ -32,7 +32,7 @@ copy .env.example .env      # so'ng .env ichiga BOT_TOKEN va ADMIN_IDS ni yozing
 ```
 
 1. Tokenni [@BotFather](https://t.me/BotFather) dan oling.
-2. O'z ID raqamingizni `ADMIN_IDS` ga yozing (bir nechta bo'lsa vergul bilan).
+2. O'z ID raqamingizni `ADMIN_IDS` ga yozing (bir nechta bo'lsa vergul bilan). Bular **bosh adminlar**: qolgan adminlarni bot ichidan (🛠 Admin panel → 👮 Adminlar) qo'shadi va o'chiradi.
 3. Majburiy kanal qo'shish: botni kanalga **administrator** qiling → botda «🛠 Admin panel» → «📡 Majburiy kanallar» → «➕ Kanal qo'shish».
 
 ## Sinovlar

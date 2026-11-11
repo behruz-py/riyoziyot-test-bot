@@ -9,9 +9,12 @@ load_dotenv(BASE_DIR / ".env")
 
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
 
-ADMIN_IDS: set[int] = {
+# Bosh adminlar (.env / Render): bot ichidan o'chirib bo'lmaydi, faqat ular boshqa adminlarni boshqaradi
+SUPER_ADMIN_IDS: frozenset[int] = frozenset(
     int(x) for x in os.getenv("ADMIN_IDS", "").replace(";", ",").split(",") if x.strip().lstrip("-").isdigit()
-}
+)
+# Barcha adminlar: bosh adminlar + bot ichidan qo'shilganlar (bazadan yuklanadi, admins.py ga qarang)
+ADMIN_IDS: set[int] = set(SUPER_ADMIN_IDS)
 
 _db_path = Path(os.getenv("DB_PATH", "data/bot.db"))
 DB_PATH: Path = _db_path if _db_path.is_absolute() else BASE_DIR / _db_path

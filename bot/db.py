@@ -71,6 +71,11 @@ CREATE INDEX IF NOT EXISTS idx_sub_user ON submissions(user_id);
 CREATE TABLE IF NOT EXISTS banned_words (
     word  TEXT PRIMARY KEY
 );
+CREATE TABLE IF NOT EXISTS admins (
+    user_id   {BIG} PRIMARY KEY,
+    added_by  {BIG} NOT NULL,
+    added_at  TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
@@ -574,3 +579,19 @@ async def set_setting(key: str, value: str) -> None:
         "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, value),
     )
+
+
+# ---------------------------------------------------------------- adminlar (bot ichidan qo'shilganlar)
+async def get_admins() -> list:
+    return await _all("SELECT * FROM admins ORDER BY added_at, user_id")
+
+
+async def add_admin(user_id: int, added_by: int) -> None:
+    await _exec(
+        "INSERT INTO admins(user_id, added_by, added_at) VALUES(?,?,?) ON CONFLICT(user_id) DO NOTHING",
+        (user_id, added_by, now_utc()),
+    )
+
+
+async def remove_admin(user_id: int) -> None:
+    await _exec("DELETE FROM admins WHERE user_id=?", (user_id,))

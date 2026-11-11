@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from datetime import datetime, timedelta
 
-from .. import daily, db, keyparser as kp, moderation, services, subscription
+from .. import admins, daily, db, keyparser as kp, moderation, services, subscription
 from ..config import ADMIN_IDS, TZ, is_admin
 from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, home_btn, main_menu
 
@@ -32,6 +32,7 @@ class Admin(StatesGroup):
     channel = State()
     block = State()
     badword = State()
+    addadmin = State()
 
 
 PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
@@ -40,7 +41,8 @@ PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
      InlineKeyboardButton(text="📌 Pinni olib tashlash", callback_data="adm:unpin")],
     [InlineKeyboardButton(text="📡 Majburiy kanallar", callback_data="adm:ch")],
     [InlineKeyboardButton(text="🚫 Bloklash / blokdan chiqarish", callback_data="adm:block")],
-    [InlineKeyboardButton(text="🧹 Taqiqlangan so'zlar", callback_data="adm:words")],
+    [InlineKeyboardButton(text="🧹 Taqiqlangan so'zlar", callback_data="adm:words"),
+     InlineKeyboardButton(text="👮 Adminlar", callback_data="adm:admins")],
     [InlineKeyboardButton(text="💾 Zaxira nusxa", callback_data="adm:backup"),
      InlineKeyboardButton(text="🗓 Kunlik hisobot", callback_data="adm:daily")],
     [home_btn()],
@@ -602,3 +604,144 @@ async def daily_now(callback: CallbackQuery) -> None:
     await callback.bot.send_message(
         callback.from_user.id, f"{await daily.report_text()}\n\n<i>{schedule}</i>", reply_markup=BACK_TO_PANEL
     )
+
+
+# ---------------------------------------------------------------- adminlarni boshqarish
+async def _admins_view(viewer_id: int):
+    can_manage = admins.is_super(viewer_id)
+    lines = ["👮 <b>Adminlar</b>", ""]
+    kb = InlineKeyboardBuilder()
+    for uid in sorted(ADMIN_IDS, key=lambda x: (not admins.is_super(x), x)):
+        account = await db.get_user(uid)
+        name = escape((account["full_name"] or account["tg_name"]) if account else "") or "botga hali kirmagan"
+        mark = "👑" if admins.is_super(uid) else "👮"
+        lines.append(f"{mark} {name} — <code>{uid}</code>" + (" (siz)" if uid == viewer_id else ""))
+        if can_manage and not admins.is_super(uid):
+            kb.row(InlineKeyboardButton(text=f"🗑 {name[:30]}", callback_data=f"adm:admdel:{uid}"))
+    lines += [
+        "",
+        "<i>👑 Bosh admin — server sozlamalarida belgilangan, bot ichidan o'chirib bo'lmaydi.\n"
+        "👮 Admin — statistika, xabar tarqatish, kanallar, bloklash va zaxira nusxadan foydalana oladi.</i>",
+    ]
+    if can_manage:
+        kb.row(InlineKeyboardButton(text="➕ Admin qo'shish", callback_data="adm:admadd"))
+    else:
+        lines += ["", "Admin qo'shish va o'chirish faqat bosh adminga ruxsat etilgan."]
+    kb.row(InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel"))
+    return "\n".join(lines), kb.as_markup()
+
+
+async def _only_super(callback: CallbackQuery) -> bool:
+    if admins.is_super(callback.from_user.id):
+        return True
+    await callback.answer("Bu amal faqat bosh adminga ruxsat etilgan.", show_alert=True)
+    return False
+
+
+@router.callback_query(F.data == "adm:admins")
+async def admins_list(callback: CallbackQuery) -> None:
+    text, kb = await _admins_view(callback.from_user.id)
+    await services.edit_or_send(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:admadd")
+async def admin_add(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await _only_super(callback):
+        return
+    await callback.answer()
+    await state.set_state(Admin.addadmin)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        "➕ <b>Admin qo'shish</b>\n\n"
+        "Yangi adminning <b>ID raqamini</b> yuboring yoki uning istalgan xabarini shu yerga <b>forward</b> qiling.\n\n"
+        "<i>• U avval botga /start bosgan bo'lishi kerak\n"
+        "• ID raqami uning «👤 Profil» bo'limida ko'rinadi\n"
+        "• Admin foydalanuvchilar ma'lumotini ko'radi va barchaga xabar yubora oladi — "
+        "faqat ishonchli odamni qo'shing</i>",
+        reply_markup=cancel_kb("ID raqami"),
+    )
+
+
+@router.message(Admin.addadmin)
+async def admin_add_got(message: Message, state: FSMContext) -> None:
+    if not admins.is_super(message.from_user.id):
+        await state.clear()
+        return
+    forwarded = getattr(getattr(message, "forward_origin", None), "sender_user", None)
+    text = (message.text or "").strip()
+    target_id = forwarded.id if forwarded else int(text) if text.isdigit() else None
+    if target_id is None:
+        hidden = getattr(message, "forward_origin", None) is not None
+        await message.answer(
+            "⚠️ Bu foydalanuvchi forward qilingan xabarlarda o'zini yashirgan. Uning ID raqamini yuboring 👇"
+            if hidden else "⚠️ ID raqami faqat raqamlardan iborat. Qaytadan yuboring yoki xabarini forward qiling 👇"
+        )
+        return
+    account = await db.get_user(target_id)
+    if account is None:
+        await message.answer(
+            "⚠️ Bu foydalanuvchi botga hali kirmagan.\n\n"
+            "Avval u botga /start bossin, keyin ID raqamini qaytadan yuboring 👇"
+        )
+        return
+    if is_admin(target_id):
+        await message.answer("ℹ️ Bu foydalanuvchi allaqachon admin. Boshqa ID yuboring yoki «❌ Bekor qilish»ni bosing.")
+        return
+    await admins.add(target_id, message.from_user.id)
+    await state.clear()
+    name = escape(account["full_name"] or account["tg_name"] or str(target_id))
+    await message.answer(
+        f"✅ <b>{name}</b> (<code>{target_id}</code>) admin etib tayinlandi.",
+        reply_markup=main_menu(message.from_user.id),
+    )
+    try:
+        await message.bot.send_message(
+            target_id,
+            "👮 <b>Siz admin etib tayinlandingiz!</b>\n\n"
+            "Menyuda «🛠 Admin panel» tugmasi paydo bo'ldi 👇",
+            reply_markup=main_menu(target_id),
+        )
+    except TelegramAPIError:
+        pass
+    view, kb = await _admins_view(message.from_user.id)
+    await message.answer(view, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("adm:admdel:"))
+async def admin_remove_ask(callback: CallbackQuery) -> None:
+    if not await _only_super(callback):
+        return
+    target_id = int(callback.data.split(":")[2])
+    account = await db.get_user(target_id)
+    name = escape((account["full_name"] or account["tg_name"]) if account else "") or str(target_id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Ha, o'chirish", callback_data=f"adm:admdelok:{target_id}"),
+        InlineKeyboardButton(text="⬅️ Yo'q", callback_data="adm:admins"),
+    ]])
+    await services.edit_or_send(
+        callback,
+        f"🗑 <b>{name}</b> (<code>{target_id}</code>) adminlikdan olinsinmi?\n\n"
+        "U admin paneldan foydalana olmay qoladi, oddiy foydalanuvchi sifatida davom etadi.",
+        kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:admdelok:"))
+async def admin_remove(callback: CallbackQuery) -> None:
+    if not await _only_super(callback):
+        return
+    target_id = int(callback.data.split(":")[2])
+    if not await admins.remove(target_id):
+        await callback.answer("Bosh adminni bot ichidan o'chirib bo'lmaydi.", show_alert=True)
+        return
+    await callback.answer("Adminlikdan olindi.")
+    try:
+        await callback.bot.send_message(
+            target_id, "ℹ️ Siz endi admin emassiz.", reply_markup=main_menu(target_id)
+        )
+    except TelegramAPIError:
+        pass
+    text, kb = await _admins_view(callback.from_user.id)
+    await services.edit_or_send(callback, text, kb)

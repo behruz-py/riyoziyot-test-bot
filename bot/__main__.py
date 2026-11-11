@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, ErrorEvent
 
-from . import config, daily, db, services
+from . import admins, config, daily, db, services
 from .handlers import admin, create, mytests, solve, start
 from .middlewares import SubscriptionMiddleware, UserMiddleware
 from .storage import DbStorage
@@ -50,10 +50,11 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not config.BOT_TOKEN:
         sys.exit("BOT_TOKEN topilmadi. .env.example faylidan nusxa olib, .env faylini to'ldiring.")
-    if not config.ADMIN_IDS:
-        log.warning("ADMIN_IDS bo'sh — admin paneldan hech kim foydalana olmaydi.")
+    if not config.SUPER_ADMIN_IDS:
+        log.warning("ADMIN_IDS bo'sh — bosh admin yo'q, admin paneldan hech kim foydalana olmaydi.")
 
     await db.init(config.DATABASE_URL or config.DB_PATH)
+    await admins.load()
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = build_dispatcher()
 
