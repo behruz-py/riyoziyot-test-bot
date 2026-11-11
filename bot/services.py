@@ -182,6 +182,15 @@ def result_lines(test, sub, rank: int, total: int) -> list[str]:
 
 
 async def show_result(bot: Bot, chat_id: int, test, sub) -> None:
+    if sub["is_hidden"]:
+        await bot.send_message(
+            chat_id,
+            f"📋 <b>{escape(test['title'])}</b>\n\n"
+            "🚫 Sizning natijangiz bu test reytingidan chiqarilgan "
+            f"({'administrator' if sub['is_hidden'] == db.HIDDEN_BY_BAN else 'test muallifi'} qarori bilan).\n\n"
+            "<i>Odatda bunga nomaqbul ism yoki test qoidalarini buzish sabab bo'ladi.</i>",
+        )
+        return
     rank = await db.rank_of(sub)
     total = await db.count_submissions(test["id"])
     await send_long(bot, chat_id, result_lines(test, sub, rank, total), reply_markup=result_kb(test["id"]))

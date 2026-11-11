@@ -219,13 +219,20 @@ async def scenario():
     assert "ism va familiyangizni" in out, out
     out = await photo(S1)
     assert "ism va familiyangizni" in out, out
+    out = await msg(S1, "Ali 777")
+    assert "faqat harflardan" in out, out
+    out = await msg(S1, "Jalab Jalabov")
+    assert "qabul qila olmaymiz" in out, out
+    out = await msg(S1, "с у к а")
+    assert "qabul qila olmaymiz" in out, out
+    assert (await db.get_user(S1))["full_name"] is None
     out = await msg(S1, "Aliyev Vali")
     assert "Ro'yxatdan o'tdingiz" in out and "topilmadi" in out, out  # deep-link saqlanib qolgan, test yo'q
     out = await msg(S1, kb.BTN_BACK)  # kod kutish holatidan orqaga -> menyu
     assert "Asosiy menyu" in out, out
 
     await register(TEACHER, "Ustoz Karimov")
-    await register(S2, "Bobur <b>Mirzo</b>")
+    await register(S2, "Bobur Mirzo")
     await register(S3, "Salimova Dilnoza")
 
     # --- test yaratish (aralash, alohida ballar, muddatsiz) + orqaga qaytishlar
@@ -233,6 +240,8 @@ async def scenario():
     assert "1-qadam" in out, out
     out = await msg(TEACHER, "ab")
     assert "3–100 belgidan" in out, out
+    out = await msg(TEACHER, "Blyat test")
+    assert "nomaqbul so'z" in out, out
     out = await photo(TEACHER)
     assert "test nomini" in out, out  # holatga mos yo'l-yo'riq
     out = await msg(TEACHER, "Algebra <9-sinf> & nazorat")
@@ -332,7 +341,6 @@ async def scenario():
     # --- reyting
     out = await cb(S1, f"rating:{tid}")
     assert out.index("Bobur") < out.index("Aliyev") < out.index("Salimova"), out
-    assert "&lt;b&gt;Mirzo&lt;/b&gt;" in out, "HTML ekranlanmagan"
     out = await msg(S1, kb.BTN_RATING)
     assert f"rating:{tid}" in last_markup_data(), last_markup_data()
     out = await cb(S1, f"rating:{tid}")
@@ -391,6 +399,80 @@ async def scenario():
     assert "Toshkent" in out and "Ballar" in out, out
     out = await cb(TEACHER, f"t:share:{tid}")
     assert code in out
+
+    # --- moderatsiya: muallif ishtirokchini reytingdan chiqaradi / qaytaradi
+    out = await cb(TEACHER, f"t:pl:{tid}:0")
+    assert "ishtirokchilar (3 nafar)" in out and f"t:pu:{tid}:{S3}" in last_markup_data(), out
+    out = await cb(TEACHER, f"t:pu:{tid}:{S3}")
+    assert "Salimova Dilnoza" in out and "Reytingda" in out and f"t:ph:{tid}:{S3}" in last_markup_data(), out
+    start = len(session.calls)
+    await cb(77, f"t:ph:{tid}:{S3}")  # begona odam chiqara olmaydi
+    assert (await db.get_submission(tid, S3))["is_hidden"] == 0
+    out = await cb(TEACHER, f"t:ph:{tid}:{S3}")
+    assert "Siz reytingdan chiqargansiz" in out and f"t:pr:{tid}:{S3}" in last_markup_data(), out
+    assert await db.count_submissions(tid) == 2
+    out = await cb(S1, f"rating:{tid}")
+    assert "Salimova" not in out and "2 nafar" in out, out
+    out = await cb(S3, f"res:{tid}")
+    assert "reytingidan chiqarilgan" in out and "test muallifi" in out, out
+    start = len(session.calls)
+    await cb(S3, f"rating:{tid}")
+    await cb(S3, f"cert:{tid}")
+    assert "SendMessage" not in names(start) and "SendPhoto" not in names(start), names(start)
+    out = await msg(S3, f"{code}*abcda")  # qayta javob yubora olmaydi
+    assert "reytingidan chiqarilgan" in out, out
+    out = await cb(TEACHER, f"t:pr:{tid}:{S3}")
+    assert "Reytingda" in out and await db.count_submissions(tid) == 3, out
+
+    # --- moderatsiya: shikoyat -> admin ismni bekor qiladi
+    start = len(session.calls)
+    await cb(TEACHER, f"t:pp:{tid}:{S3}")
+    out = texts(start)
+    assert "Shikoyat" in out and "Salimova Dilnoza" in out and f"adm:rename:{S3}" in last_markup_data(), out
+    start = len(session.calls)
+    await cb(TEACHER, f"t:pp:{tid}:{S3}")  # takroriy shikoyat yuborilmaydi
+    assert "SendMessage" not in names(start)
+    start = len(session.calls)
+    await cb(S1, f"adm:rename:{S1}")  # oddiy foydalanuvchi admin tugmasidan foydalana olmaydi
+    assert (await db.get_user(S1))["full_name"] == "Aliyev Vali"
+    out = await cb(ADMIN, f"adm:rename:{S3}")
+    assert "Ismi bekor qilindi" in out and "Ismingiz bekor qilindi" in out, out
+    assert (await db.get_user(S3))["full_name"] is None
+    assert (await db.get_submission(tid, S3))["full_name"] == "Ishtirokchi 23"
+    out = await msg(S3, kb.BTN_MY_RESULTS)
+    assert "ism va familiyangizni" in out, out
+    out = await msg(S3, "Salimova Dilnoza")
+    assert "Ro'yxatdan o'tdingiz" in out, out
+
+    # --- moderatsiya: admin bloklaydi -> barcha reytinglardan yo'qoladi; blokdan chiqarsa qaytadi
+    out = await cb(ADMIN, f"adm:ban:{S2}")
+    assert "Bloklandi" in out, out
+    assert await db.count_submissions(tid) == 2 and (await db.get_user(S2))["is_blocked"]
+    out = await cb(S1, f"rating:{tid}")
+    assert "Bobur" not in out, out
+    start = len(session.calls)
+    await msg(S2, kb.BTN_HELP)
+    assert len(session.calls) == start, "bloklangan foydalanuvchiga javob berildi"
+    await cb(ADMIN, "adm:block")
+    out = await msg(ADMIN, str(S2))
+    assert "Blokdan chiqarildi" in out and await db.count_submissions(tid) == 3, out
+
+    # --- moderatsiya: admin qo'shimcha so'z qo'shadi
+    out = await cb(ADMIN, "adm:words")
+    assert "Taqiqlangan so'zlar" in out
+    await cb(ADMIN, "adm:wadd")
+    out = await msg(ADMIN, "Маймун")
+    assert "<code>maymun</code>" in out and "adm:wdel:maymun" in last_markup_data(), out
+    await cb(S1, "profile:name")
+    out = await msg(S1, "Maymunov Vali")
+    assert "qabul qila olmaymiz" in out, out
+    await msg(S1, kb.BTN_CANCEL)
+    await cb(ADMIN, "adm:wdel:maymun")
+    await cb(S1, "profile:name")
+    out = await msg(S1, "Maymunov Vali")
+    assert "saqlandi" in out, out
+    await cb(S1, "profile:name")
+    await msg(S1, "Aliyev Vali")
 
     # --- yakunlash
     await cb(TEACHER, f"t:fin:{tid}")

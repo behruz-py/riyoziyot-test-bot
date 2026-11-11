@@ -11,7 +11,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from .. import db
+from .. import db, moderation
 from ..keyboards import BTN_BACK, BTN_CANCEL, BTN_HELP, BTN_PROFILE, cancel_kb, home_btn, main_menu
 from ..subscription import PENDING_START
 from . import solve
@@ -61,16 +61,27 @@ HELP_TEXT = (
 )
 
 NAME_ERROR = (
-    "⚠️ Ism va familiya 3–60 belgidan iborat bo'lishi va harflardan tashkil topishi kerak.\n\n"
+    "⚠️ Ism va familiya 3–60 belgidan iborat bo'lishi va <b>faqat harflardan</b> tashkil topishi kerak "
+    "(raqam, belgi va emoji mumkin emas).\n\n"
     "Qaytadan yozing (masalan: <i>Aliyev Vali</i>):"
 )
+BAD_NAME_ERROR = (
+    "⚠️ Bu ismni qabul qila olmaymiz.\n\n"
+    "Iltimos, <b>haqiqiy ism va familiyangizni</b> yozing — u reyting va sertifikatda boshqalarga ko'rinadi."
+)
+_NAME_EXTRA_CHARS = " '-.’ʻʼ‘`"
 
 
 def valid_name(text: str) -> str | None:
+    """Ism faqat harflar, bo'shliq, tire, nuqta va apostrofdan iborat bo'lishi mumkin."""
     name = " ".join(text.split())
-    if 3 <= len(name) <= 60 and any(ch.isalpha() for ch in name) and not name.startswith("/"):
-        return name
-    return None
+    if not (3 <= len(name) <= 60):
+        return None
+    if not all(ch.isalpha() or ch in _NAME_EXTRA_CHARS for ch in name):
+        return None
+    if sum(1 for ch in name if ch.isalpha()) < 3:
+        return None
+    return name
 
 
 async def send_menu(bot: Bot, user_id: int, text: str = MENU_TEXT) -> None:
@@ -83,6 +94,8 @@ async def enter(bot: Bot, state: FSMContext, user) -> None:
     if not user["full_name"]:
         await state.set_state(Reg.name)
         suggestion = valid_name(user["tg_name"] or "")
+        if suggestion and await moderation.is_bad(suggestion):
+            suggestion = None
         keyboard = (
             ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text=suggestion)]], resize_keyboard=True,
@@ -137,6 +150,9 @@ async def reg_name(message: Message, state: FSMContext, user) -> None:
     name = valid_name(message.text)
     if not name:
         await message.answer(NAME_ERROR)
+        return
+    if await moderation.is_bad(name):
+        await message.answer(BAD_NAME_ERROR)
         return
     await db.set_full_name(user["id"], name)
     await state.clear()
@@ -223,6 +239,9 @@ async def profile_name_set(message: Message, state: FSMContext, user) -> None:
     name = valid_name(message.text)
     if not name:
         await message.answer(NAME_ERROR)
+        return
+    if await moderation.is_bad(name):
+        await message.answer(BAD_NAME_ERROR)
         return
     await db.set_full_name(user["id"], name)
     await state.clear()

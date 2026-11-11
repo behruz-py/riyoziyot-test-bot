@@ -16,6 +16,10 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 - **Muallif paneli**: natijalar, Excel hisobot (reyting + har bir savol tahlili), kalit, ulashish, yakunlash, o'chirish.
 - **Majburiy obuna**: bir yoki bir nechta kanal, admin paneldan boshqariladi.
 - **Admin panel**: statistika, barchaga xabar tarqatish, kanallar, foydalanuvchini bloklash.
+- **Nomaqbul ismlardan himoya** (uch qatlam):
+  1. Avtomatik filtr: ism-familiya va test nomlarida so'kinish so'zlari (o'zbek, rus, ingliz; kirill/lotin, bo'shliq yoki belgi bilan yozilgani ham). Admin qo'shimcha so'z kirita oladi.
+  2. Test muallifi: «👥 Ishtirokchilar» bo'limida istalgan ishtirokchini reytingdan chiqaradi yoki adminga shikoyat yuboradi.
+  3. Admin: bloklash (barcha reytinglardan yo'qoladi) yoki ismini bekor qilish (qayta ro'yxatdan o'tadi).
 
 ## O'rnatish
 
@@ -34,6 +38,7 @@ copy .env.example .env      # so'ng .env ichiga BOT_TOKEN va ADMIN_IDS ni yozing
 
 ```powershell
 .venv\Scripts\python -m tests.test_keyparser
+.venv\Scripts\python -m tests.test_moderation
 .venv\Scripts\python -m tests.test_flow
 ```
 
@@ -47,6 +52,8 @@ copy .env.example .env      # so'ng .env ichiga BOT_TOKEN va ADMIN_IDS ni yozing
 | `bot/db.py` | SQLite (foydalanuvchilar, kanallar, testlar, natijalar) |
 | `bot/middlewares.py`, `bot/subscription.py` | Ro'yxatga olish, bloklash, majburiy obuna |
 | `bot/services.py` | Matnlar, testni yakunlash, muddat nazorati |
+| `bot/moderation.py` | Nomaqbul so'zlar filtri |
+| `bot/storage.py` | Yarim qolgan amallarni bazada saqlash |
 | `bot/excel.py`, `bot/certificate.py` | Excel hisobot va sertifikat |
 | `bot/handlers/` | start, create, solve, mytests, admin |
 

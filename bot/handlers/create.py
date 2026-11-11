@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import db, keyparser as kp, services
+from .. import db, keyparser as kp, moderation, services
 from ..config import MAX_TITLE_LEN, is_admin
 from ..keyboards import BTN_BACK, BTN_CREATE, NO_PREVIEW, flow_kb, home_btn, main_menu
 
@@ -208,6 +208,11 @@ async def got_title(message: Message, state: FSMContext, user) -> None:
         await message.answer(
             f"⚠️ Test nomi 3–{MAX_TITLE_LEN} belgidan iborat bo'lishi kerak "
             f"(siz yuborgani: {len(title)} belgi).\n\nQaytadan yuboring 👇"
+        )
+        return
+    if await moderation.is_bad(title):
+        await message.answer(
+            "⚠️ Bu nomni qabul qila olmaymiz — unda nomaqbul so'z bor.\n\nBoshqa nom yozing 👇"
         )
         return
     await state.update_data(title=title)

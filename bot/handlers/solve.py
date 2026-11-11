@@ -372,6 +372,8 @@ async def send_rating(bot: Bot, user, test, reply_markup=None) -> bool:
     """Reytingni yuboradi. Ruxsat bo'lmasa False."""
     uid = user["id"]
     sub = await db.get_submission(test["id"], uid)
+    if sub is not None and sub["is_hidden"]:
+        sub = None  # reytingdan chiqarilgan ishtirokchi reytingni ko'ra olmaydi
     if sub is None and test["owner_id"] != uid and not is_admin(uid):
         return False
     total = await db.count_submissions(test["id"])
@@ -448,6 +450,9 @@ async def certificate_cb(callback: CallbackQuery, user) -> None:
     sub = await db.get_submission(test["id"], user["id"]) if test else None
     if sub is None:
         await callback.answer("Sertifikat faqat testda qatnashganlarga beriladi.", show_alert=True)
+        return
+    if sub["is_hidden"]:
+        await callback.answer("Natijangiz reytingdan chiqarilgan — sertifikat berilmaydi.", show_alert=True)
         return
     await callback.answer("🎓 Sertifikat tayyorlanmoqda…")
     await callback.bot.send_chat_action(user["id"], "upload_photo")

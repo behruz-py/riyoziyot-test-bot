@@ -10,7 +10,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import db, keyparser as kp, services
-from ..config import is_admin
+from ..config import ADMIN_IDS, is_admin
 from ..keyboards import BTN_MY_TESTS, NO_PREVIEW, flow_kb, home_btn, main_menu, pager
 from .create import share_text
 
@@ -93,8 +93,9 @@ async def _view(test):
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="📊 Natijalar", callback_data=f"t:res:{tid}"),
            InlineKeyboardButton(text="📥 Excel hisobot", callback_data=f"t:xl:{tid}"))
-    kb.row(InlineKeyboardButton(text="🔑 Kalit", callback_data=f"t:key:{tid}"),
-           InlineKeyboardButton(text="🔗 Ulashish", callback_data=f"t:share:{tid}"))
+    kb.row(InlineKeyboardButton(text="👥 Ishtirokchilar", callback_data=f"t:pl:{tid}:0"),
+           InlineKeyboardButton(text="🔑 Kalit", callback_data=f"t:key:{tid}"))
+    kb.row(InlineKeyboardButton(text="🔗 Ulashish", callback_data=f"t:share:{tid}"))
     if active:
         kb.row(InlineKeyboardButton(text="🏁 Testni yakunlash", callback_data=f"t:fin:{tid}"))
     kb.row(InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"t:del:{tid}"),
@@ -241,6 +242,159 @@ async def delete_ok(callback: CallbackQuery, user) -> None:
     await services.edit_or_send(callback, "🗑 Test o'chirildi.\n\n" + text, kb)
 
 
+# ---------------------------------------------------------------- ishtirokchilar nazorati
+_reported: set[tuple[int, int]] = set()  # (test_id, user_id) - bir ishtirokchi ustidan takroriy shikoyatdan himoya
+
+
+async def _participants_page(test, page: int):
+    tid = test["id"]
+    total = await db.count_participants(tid)
+    kb = InlineKeyboardBuilder()
+    if total == 0:
+        kb.row(InlineKeyboardButton(text="⬅️ Testga qaytish", callback_data=f"t:v:{tid}"))
+        return f"👥 <b>{escape(test['title'])}</b>\n\nHozircha hech kim javob yubormagan.", kb.as_markup()
+    pages = (total + PAGE - 1) // PAGE
+    page = max(0, min(page, pages - 1))
+    for sub in await db.participants(tid, PAGE, page * PAGE):
+        mark = "🚫 " if sub["is_hidden"] else ""
+        kb.row(InlineKeyboardButton(
+            text=f"{mark}{sub['full_name'][:32]} — {kp.fmt_num(sub['score'])}",
+            callback_data=f"t:pu:{tid}:{sub['user_id']}",
+        ))
+    row = pager(f"t:pl:{tid}", page, pages)
+    if row:
+        kb.row(*row)
+    kb.row(InlineKeyboardButton(text="⬅️ Testga qaytish", callback_data=f"t:v:{tid}"), home_btn())
+    return (
+        f"👥 <b>{escape(test['title'])}</b> — ishtirokchilar ({total} nafar)\n\n"
+        "Nomaqbul ismli yoki testni buzayotgan ishtirokchini tanlab, <b>reytingdan chiqarishingiz</b> mumkin.\n"
+        "<i>🚫 — reytingdan chiqarilgan</i>"
+    ), kb.as_markup()
+
+
+async def _participant_card(test, user_id: int):
+    tid = test["id"]
+    sub = await db.get_submission(tid, user_id)
+    if sub is None:
+        return None, None
+    account = await db.get_user(user_id)
+    username = f"@{account['username']}" if account and account["username"] else "yo'q"
+    if sub["is_hidden"] == db.HIDDEN_BY_OWNER:
+        status = "🚫 Siz reytingdan chiqargansiz"
+    elif sub["is_hidden"] == db.HIDDEN_BY_BAN:
+        status = "🚫 Administrator tomonidan bloklangan"
+    else:
+        status = "✅ Reytingda"
+    text = (
+        f"👤 <b>{escape(sub['full_name'])}</b>\n\n"
+        f"Username: {escape(username)}\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
+        f"({sub['correct_count']} ta to'g'ri)\n"
+        f"🕒 Topshirgan: {services.to_local(sub['submitted_at'])}\n"
+        f"Holati: {status}"
+    )
+    kb = InlineKeyboardBuilder()
+    if sub["is_hidden"] == 0:
+        kb.row(InlineKeyboardButton(text="🚫 Reytingdan chiqarish", callback_data=f"t:ph:{tid}:{user_id}"))
+    elif sub["is_hidden"] == db.HIDDEN_BY_OWNER:
+        kb.row(InlineKeyboardButton(text="♻️ Reytingga qaytarish", callback_data=f"t:pr:{tid}:{user_id}"))
+    kb.row(InlineKeyboardButton(text="📣 Adminga shikoyat qilish", callback_data=f"t:pp:{tid}:{user_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Ishtirokchilar", callback_data=f"t:pl:{tid}:0"))
+    return text, kb.as_markup()
+
+
+async def _show_card(callback: CallbackQuery, test, user_id: int) -> None:
+    text, kb = await _participant_card(test, user_id)
+    if text is None:
+        await callback.answer("Ishtirokchi topilmadi.", show_alert=True)
+        return
+    await services.edit_or_send(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("t:pl:"))
+async def participants_list(callback: CallbackQuery, user) -> None:
+    test = await _owned_test(callback, user)
+    if test is None:
+        return
+    text, kb = await _participants_page(test, int(callback.data.split(":")[3]))
+    await services.edit_or_send(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("t:pu:"))
+async def participant_view(callback: CallbackQuery, user) -> None:
+    test = await _owned_test(callback, user)
+    if test is None:
+        return
+    await _show_card(callback, test, int(callback.data.split(":")[3]))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("t:ph:"))
+async def participant_hide(callback: CallbackQuery, user) -> None:
+    test = await _owned_test(callback, user)
+    if test is None:
+        return
+    target = int(callback.data.split(":")[3])
+    done = await db.set_hidden(test["id"], target, db.HIDDEN_BY_OWNER, only_if=0)
+    await callback.answer("🚫 Reytingdan chiqarildi." if done else "Bu natija allaqachon reytingda emas.")
+    await _show_card(callback, test, target)
+
+
+@router.callback_query(F.data.startswith("t:pr:"))
+async def participant_restore(callback: CallbackQuery, user) -> None:
+    test = await _owned_test(callback, user)
+    if test is None:
+        return
+    target = int(callback.data.split(":")[3])
+    done = await db.set_hidden(test["id"], target, 0, only_if=db.HIDDEN_BY_OWNER)
+    await callback.answer("♻️ Reytingga qaytarildi." if done else "Qaytarib bo'lmadi.")
+    await _show_card(callback, test, target)
+
+
+@router.callback_query(F.data.startswith("t:pp:"))
+async def participant_report(callback: CallbackQuery, user) -> None:
+    test = await _owned_test(callback, user)
+    if test is None:
+        return
+    target = int(callback.data.split(":")[3])
+    sub = await db.get_submission(test["id"], target)
+    account = await db.get_user(target)
+    if sub is None or account is None:
+        await callback.answer("Ishtirokchi topilmadi.", show_alert=True)
+        return
+    if (test["id"], target) in _reported:
+        await callback.answer("Bu ishtirokchi ustidan shikoyat allaqachon yuborilgan.", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🚫 Bloklash", callback_data=f"adm:ban:{target}"),
+           InlineKeyboardButton(text="✏️ Ismini bekor qilish", callback_data=f"adm:rename:{target}"))
+    kb.row(InlineKeyboardButton(text="✅ E'tiborsiz qoldirish", callback_data="adm:ignore"))
+    username = f"@{account['username']}" if account["username"] else "yo'q"
+    text = (
+        "📣 <b>Shikoyat: nomaqbul ishtirokchi</b>\n\n"
+        f"👤 Ismi: <b>{escape(sub['full_name'])}</b>\n"
+        f"Telegram nomi: {escape(account['tg_name'] or '—')}\n"
+        f"Username: {escape(username)}\n"
+        f"ID: <code>{target}</code>\n\n"
+        f"📋 Test: {escape(test['title'])} (<code>{test['code']}</code>)\n"
+        f"✍️ Shikoyatchi: {escape(user['full_name'] or '')} (<code>{user['id']}</code>)"
+    )
+    sent = 0
+    for admin_id in ADMIN_IDS:
+        try:
+            await callback.bot.send_message(admin_id, text, reply_markup=kb.as_markup())
+            sent += 1
+        except Exception:
+            pass
+    if not sent:
+        await callback.answer("Shikoyatni yuborib bo'lmadi. Keyinroq urinib ko'ring.", show_alert=True)
+        return
+    _reported.add((test["id"], target))
+    await callback.answer("📣 Shikoyat administratorga yuborildi. Rahmat!", show_alert=True)
+
+
 # ---------------------------------------------------------------- tushunarsiz xabarlar (eng oxirgi handlerlar)
 # Jarayon ichida kutilmagan narsa yuborilganda: hozir aynan nima kutilayotganini eslatamiz
 STATE_HINTS = {
@@ -257,6 +411,7 @@ STATE_HINTS = {
     "RatingSt:code": "test kodini yuboring yoki ro'yxatdan testni tanlang",
     "Admin:channel": "kanal username'i, ID raqami yoki kanaldan forward qilingan postni yuboring",
     "Admin:block": "foydalanuvchining ID raqamini yuboring",
+    "Admin:badword": "taqiqlanadigan so'zni <b>matn</b> ko'rinishida yuboring",
 }
 
 

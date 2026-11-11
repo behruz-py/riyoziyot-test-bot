@@ -63,9 +63,13 @@ CREATE TABLE IF NOT EXISTS submissions (
     score          {REAL} NOT NULL,
     max_score      {REAL} NOT NULL,
     submitted_at   TEXT NOT NULL,
+    is_hidden      INTEGER NOT NULL DEFAULT 0,
     UNIQUE(test_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_sub_user ON submissions(user_id);
+CREATE TABLE IF NOT EXISTS banned_words (
+    word  TEXT PRIMARY KEY
+);
 CREATE TABLE IF NOT EXISTS fsm (
     user_id     {BIG} PRIMARY KEY,
     state       TEXT,
@@ -78,6 +82,11 @@ _PG_TYPES = {"PK": "BIGSERIAL PRIMARY KEY", "BIG": "BIGINT", "REAL": "DOUBLE PRE
 
 # Reyting tartibi: ball kamayishi bo'yicha, teng bo'lsa - oldin topshirgan yuqorida
 # (submissions_ranked va rank_of bir xil tartibdan foydalanadi)
+#
+# submissions.is_hidden: 0 - reytingda; 1 - test muallifi chiqargan; 2 - admin bloklagani uchun yashirilgan.
+# Yashirilgan natija o'chirilmaydi (qayta javob yuborib bo'lmasligi uchun), faqat reyting/hisobotda ko'rinmaydi.
+HIDDEN_BY_OWNER = 1
+HIDDEN_BY_BAN = 2
 
 
 class Duplicate(Exception):
@@ -116,6 +125,10 @@ async def init(target: Path | str) -> None:
         )
         async with _pool.acquire() as conn:
             await conn.execute(SCHEMA.format(**_PG_TYPES))
+            # Eski bazalar uchun yangi ustunlar
+            await conn.execute(
+                "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS is_hidden INTEGER NOT NULL DEFAULT 0"
+            )
         log.info("Baza: PostgreSQL")
         return
     path = Path(target)
@@ -125,6 +138,10 @@ async def init(target: Path | str) -> None:
     await _conn.execute("PRAGMA journal_mode=WAL")
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA.format(**_SQLITE_TYPES))
+    async with _conn.execute("PRAGMA table_info(submissions)") as cur:  # eski bazalar uchun yangi ustunlar
+        columns = {row["name"] for row in await cur.fetchall()}
+    if "is_hidden" not in columns:
+        await _conn.execute("ALTER TABLE submissions ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0")
     await _conn.commit()
     log.info("Baza: SQLite (%s)", path)
 
@@ -293,7 +310,7 @@ async def get_test_by_code(code: str):
 
 async def tests_by_owner(owner_id: int, limit: int, offset: int) -> list:
     return await _all(
-        """SELECT t.*, (SELECT COUNT(*) FROM submissions s WHERE s.test_id=t.id) AS participants
+        """SELECT t.*, (SELECT COUNT(*) FROM submissions s WHERE s.test_id=t.id AND s.is_hidden=0) AS participants
            FROM tests t WHERE owner_id=? ORDER BY id DESC LIMIT ? OFFSET ?""",
         (owner_id, limit, offset),
     )
@@ -351,7 +368,7 @@ async def get_submission(test_id: int, user_id: int):
 async def submissions_ranked(test_id: int, limit: int | None = None) -> list:
     sql = (
         "SELECT s.*, u.username FROM submissions s LEFT JOIN users u ON u.id=s.user_id "
-        "WHERE s.test_id=? ORDER BY s.score DESC, s.submitted_at ASC, s.id ASC"
+        "WHERE s.test_id=? AND s.is_hidden=0 ORDER BY s.score DESC, s.submitted_at ASC, s.id ASC"
     )
     if limit:
         sql += f" LIMIT {int(limit)}"
@@ -359,13 +376,13 @@ async def submissions_ranked(test_id: int, limit: int | None = None) -> list:
 
 
 async def count_submissions(test_id: int) -> int:
-    row = await _one("SELECT COUNT(*) AS c FROM submissions WHERE test_id=?", (test_id,))
+    row = await _one("SELECT COUNT(*) AS c FROM submissions WHERE test_id=? AND is_hidden=0", (test_id,))
     return row["c"]
 
 
 async def rank_of(sub) -> int:
     row = await _one(
-        """SELECT COUNT(*) AS c FROM submissions WHERE test_id=? AND (
+        """SELECT COUNT(*) AS c FROM submissions WHERE test_id=? AND is_hidden=0 AND (
                score > ? OR (score = ? AND (submitted_at < ? OR (submitted_at = ? AND id < ?))))""",
         (sub["test_id"], sub["score"], sub["score"], sub["submitted_at"], sub["submitted_at"], sub["id"]),
     )
@@ -410,3 +427,53 @@ async def fsm_set(user_id: int, state: str | None, data: str) -> None:
 
 async def fsm_delete(user_id: int) -> None:
     await _exec("DELETE FROM fsm WHERE user_id=?", (user_id,))
+
+
+# ---------------------------------------------------------------- moderatsiya
+async def participants(test_id: int, limit: int, offset: int) -> list:
+    """Barcha ishtirokchilar (yashirilganlari ham) - muallif nazorati uchun."""
+    return await _all(
+        """SELECT s.*, u.username FROM submissions s LEFT JOIN users u ON u.id=s.user_id
+           WHERE s.test_id=? ORDER BY s.score DESC, s.submitted_at ASC, s.id ASC LIMIT ? OFFSET ?""",
+        (test_id, limit, offset),
+    )
+
+
+async def count_participants(test_id: int) -> int:
+    row = await _one("SELECT COUNT(*) AS c FROM submissions WHERE test_id=?", (test_id,))
+    return row["c"]
+
+
+async def set_hidden(test_id: int, user_id: int, value: int, only_if: int) -> bool:
+    """Natijaning ko'rinishini o'zgartiradi; faqat hozirgi qiymati only_if bo'lsa."""
+    n = await _exec(
+        "UPDATE submissions SET is_hidden=? WHERE test_id=? AND user_id=? AND is_hidden=?",
+        (value, test_id, user_id, only_if),
+    )
+    return n > 0
+
+
+async def hide_user_everywhere(user_id: int) -> None:
+    await _exec("UPDATE submissions SET is_hidden=? WHERE user_id=? AND is_hidden=0", (HIDDEN_BY_BAN, user_id))
+
+
+async def unhide_user_everywhere(user_id: int) -> None:
+    await _exec("UPDATE submissions SET is_hidden=0 WHERE user_id=? AND is_hidden=?", (user_id, HIDDEN_BY_BAN))
+
+
+async def anonymize_user(user_id: int, label: str) -> None:
+    """Ismni bekor qiladi: foydalanuvchi qayta ro'yxatdan o'tadi, eski natijalarida ismi almashtiriladi."""
+    await _exec("UPDATE users SET full_name=NULL WHERE id=?", (user_id,))
+    await _exec("UPDATE submissions SET full_name=? WHERE user_id=?", (label, user_id))
+
+
+async def get_banned_words() -> list:
+    return await _all("SELECT word FROM banned_words ORDER BY word")
+
+
+async def add_banned_word(word: str) -> None:
+    await _exec("INSERT INTO banned_words(word) VALUES(?) ON CONFLICT(word) DO NOTHING", (word,))
+
+
+async def delete_banned_word(word: str) -> None:
+    await _exec("DELETE FROM banned_words WHERE word=?", (word,))
