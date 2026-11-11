@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS submissions (
     UNIQUE(test_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_sub_user ON submissions(user_id);
+CREATE TABLE IF NOT EXISTS fsm (
+    user_id     {BIG} PRIMARY KEY,
+    state       TEXT,
+    data        TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
 """
 _SQLITE_TYPES = {"PK": "INTEGER PRIMARY KEY AUTOINCREMENT", "BIG": "INTEGER", "REAL": "REAL"}
 _PG_TYPES = {"PK": "BIGSERIAL PRIMARY KEY", "BIG": "BIGINT", "REAL": "DOUBLE PRECISION"}
@@ -377,3 +383,30 @@ async def submissions_by_user(user_id: int, limit: int, offset: int) -> list:
 async def count_submissions_by_user(user_id: int) -> int:
     row = await _one("SELECT COUNT(*) AS c FROM submissions WHERE user_id=?", (user_id,))
     return row["c"]
+
+
+async def recent_tests_for_user(user_id: int, limit: int) -> list:
+    """Foydalanuvchi yaratgan yoki qatnashgan oxirgi testlar (reyting ro'yxati uchun)."""
+    return await _all(
+        """SELECT t.id, t.title, t.code, t.owner_id FROM tests t
+           WHERE t.owner_id=? OR t.id IN (SELECT test_id FROM submissions WHERE user_id=?)
+           ORDER BY t.id DESC LIMIT ?""",
+        (user_id, user_id, limit),
+    )
+
+
+# ---------------------------------------------------------------- fsm (yarim qolgan amallar)
+async def fsm_get(user_id: int):
+    return await _one("SELECT state, data FROM fsm WHERE user_id=?", (user_id,))
+
+
+async def fsm_set(user_id: int, state: str | None, data: str) -> None:
+    await _exec(
+        "INSERT INTO fsm(user_id, state, data, updated_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET state=excluded.state, data=excluded.data, updated_at=excluded.updated_at",
+        (user_id, state, data, now_utc()),
+    )
+
+
+async def fsm_delete(user_id: int) -> None:
+    await _exec("DELETE FROM fsm WHERE user_id=?", (user_id,))

@@ -7,11 +7,12 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from . import db, subscription
 from .config import is_admin
-from .keyboards import MENU_BUTTONS, subscribe_kb
+from .keyboards import BACK_AWARE_STATES, BTN_BACK, MENU_BUTTONS, subscribe_kb
 
 SUB_TEXT = (
-    "🔒 Botdan foydalanish uchun quyidagi kanal(lar)ga obuna bo'ling, "
-    "so'ng <b>«✅ Obuna bo'ldim»</b> tugmasini bosing:"
+    "🔒 <b>Botdan foydalanish uchun kanalimizga obuna bo'ling</b>\n\n"
+    "1️⃣ Quyidagi kanal(lar)ga o'ting va obuna bo'ling\n"
+    "2️⃣ Qaytib kelib, <b>«✅ Obuna bo'ldim»</b> tugmasini bosing"
 )
 
 
@@ -35,7 +36,12 @@ class UserMiddleware(BaseMiddleware):
 
         state = data.get("state")
         if isinstance(event, Message) and event.text and state is not None:
-            if event.text in MENU_BUTTONS or event.text.startswith("/"):
+            raw_state = data.get("raw_state") or ""
+            leaves_flow = event.text in MENU_BUTTONS or event.text.startswith("/")
+            # «Orqaga»: o'zi qayta ishlamaydigan jarayonlarda asosiy menyuga qaytaradi
+            if event.text == BTN_BACK and not raw_state.startswith(BACK_AWARE_STATES):
+                leaves_flow = True
+            if leaves_flow:
                 await state.clear()
                 data["raw_state"] = None
         return await handler(event, data)

@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import db, services, subscription
 from ..config import ADMIN_IDS, is_admin
-from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, main_menu
+from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, home_btn, main_menu
 
 log = logging.getLogger(__name__)
 
@@ -36,26 +36,34 @@ PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📢 Xabar tarqatish", callback_data="adm:bc")],
     [InlineKeyboardButton(text="📡 Majburiy kanallar", callback_data="adm:ch")],
     [InlineKeyboardButton(text="🚫 Bloklash / blokdan chiqarish", callback_data="adm:block")],
+    [home_btn()],
 ])
+PANEL_TEXT = "🛠 <b>Admin panel</b>\n\nKerakli bo'limni tanlang 👇"
+BACK_TO_PANEL = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel")]]
+)
 
 
 @router.message(Command("admin"))
 @router.message(F.text == BTN_ADMIN)
 async def panel(message: Message) -> None:
-    await message.answer("🛠 <b>Admin panel</b>", reply_markup=PANEL_KB)
+    await message.answer(PANEL_TEXT, reply_markup=PANEL_KB)
 
 
 @router.callback_query(F.data == "adm:panel")
 async def panel_cb(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await services.edit_or_send(callback, "🛠 <b>Admin panel</b>", PANEL_KB)
+    await services.edit_or_send(callback, PANEL_TEXT, PANEL_KB)
     await callback.answer()
 
 
 @router.callback_query(F.data == "adm:stats")
 async def stats(callback: CallbackQuery) -> None:
     s = await db.stats()
-    back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:panel")]])
+    back = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔄 Yangilash", callback_data="adm:stats"),
+        InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel"),
+    ]])
     await services.edit_or_send(
         callback,
         "📊 <b>Statistika</b>\n\n"
@@ -97,7 +105,7 @@ async def bc_message(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "adm:bcno")
 async def bc_cancel(callback: CallbackQuery) -> None:
-    await services.edit_or_send(callback, "❌ Xabar tarqatish bekor qilindi.")
+    await services.edit_or_send(callback, "❌ Xabar tarqatish bekor qilindi.", BACK_TO_PANEL)
     await callback.answer()
 
 
@@ -150,7 +158,7 @@ async def _channels_view():
         lines.append(f"{i}. <a href=\"{escape(ch['url'])}\">{escape(ch['title'])}</a> (<code>{ch['chat_id']}</code>)")
         kb.row(InlineKeyboardButton(text=f"🗑 {ch['title'][:40]}", callback_data=f"adm:chdel:{ch['id']}"))
     kb.row(InlineKeyboardButton(text="➕ Kanal qo'shish", callback_data="adm:chadd"))
-    kb.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:panel"))
+    kb.row(InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel"))
     return "\n".join(lines), kb.as_markup()
 
 
@@ -261,7 +269,7 @@ async def block_toggle(message: Message, state: FSMContext) -> None:
         await message.answer("⚠️ Bunday ID li foydalanuvchi topilmadi. Qaytadan yuboring:")
         return
     if is_admin(target["id"]):
-        await message.answer("⚠️ Adminni bloklab bo'lmaydi.")
+        await message.answer("⚠️ Adminni bloklab bo'lmaydi. Boshqa ID yuboring yoki «❌ Bekor qilish»ni bosing.")
         return
     blocked = not target["is_blocked"]
     await db.set_blocked(target["id"], blocked)
@@ -271,3 +279,4 @@ async def block_toggle(message: Message, state: FSMContext) -> None:
         f"{'🚫 Bloklandi' if blocked else '✅ Blokdan chiqarildi'}: <b>{name}</b> (<code>{target['id']}</code>)",
         reply_markup=main_menu(message.from_user.id),
     )
+    await message.answer(PANEL_TEXT, reply_markup=PANEL_KB)

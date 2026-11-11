@@ -9,12 +9,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, ErrorEvent
 
 from . import config, db, services
 from .handlers import admin, create, mytests, solve, start
 from .middlewares import SubscriptionMiddleware, UserMiddleware
+from .storage import DbStorage
 
 log = logging.getLogger("bot")
 
@@ -26,14 +26,17 @@ async def on_error(event: ErrorEvent) -> bool:
         if update.callback_query:
             await update.callback_query.answer("⚠️ Xatolik yuz berdi. Qaytadan urinib ko'ring.", show_alert=True)
         elif update.message:
-            await update.message.answer("⚠️ Kutilmagan xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
+            await update.message.answer(
+                "⚠️ Kutilmagan xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.\n"
+                "Muammo takrorlansa, /start ni bosing."
+            )
     except Exception:
         pass
     return True
 
 
 def build_dispatcher() -> Dispatcher:
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=DbStorage())
     for observer in (dp.message, dp.callback_query):
         observer.outer_middleware(UserMiddleware())
         observer.outer_middleware(SubscriptionMiddleware())

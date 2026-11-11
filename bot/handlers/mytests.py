@@ -5,12 +5,13 @@ import asyncio
 from html import escape
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import db, keyparser as kp, services
 from ..config import is_admin
-from ..keyboards import BTN_MY_TESTS, NO_PREVIEW, main_menu, pager
+from ..keyboards import BTN_MY_TESTS, NO_PREVIEW, flow_kb, home_btn, main_menu, pager
 from .create import share_text
 
 router = Router(name="mytests")
@@ -21,11 +22,15 @@ PAGE = 8
 
 async def _list_page(user_id: int, page: int):
     total = await db.count_tests_by_owner(user_id)
+    kb = InlineKeyboardBuilder()
     if total == 0:
-        return "📚 Siz hali test yaratmagansiz. «➕ Test yaratish» tugmasini bosing.", None
+        kb.row(InlineKeyboardButton(text="➕ Birinchi testni yaratish", callback_data="go:create"))
+        return (
+            "📚 <b>Mening testlarim</b>\n\nSiz hali test yaratmagansiz.\n"
+            "Test yaratish 1 daqiqa vaqt oladi — sinab ko'ring 👇"
+        ), kb.as_markup()
     pages = (total + PAGE - 1) // PAGE
     page = max(0, min(page, pages - 1))
-    kb = InlineKeyboardBuilder()
     for t in await db.tests_by_owner(user_id, PAGE, page * PAGE):
         mark = "🟢" if services.is_open(t) else "🔴"
         kb.row(InlineKeyboardButton(
@@ -35,7 +40,12 @@ async def _list_page(user_id: int, page: int):
     row = pager("mt", page, pages)
     if row:
         kb.row(*row)
-    return f"📚 <b>Mening testlarim</b> (jami {total} ta)\n🟢 faol · 🔴 yakunlangan", kb.as_markup()
+    kb.row(InlineKeyboardButton(text="➕ Yangi test", callback_data="go:create"), home_btn())
+    return (
+        f"📚 <b>Mening testlarim</b> — jami {total} ta\n"
+        "<i>🟢 faol · 🔴 yakunlangan · 👥 ishtirokchilar soni</i>\n\n"
+        "Boshqarish uchun testni tanlang 👇"
+    ), kb.as_markup()
 
 
 @router.message(F.text == BTN_MY_TESTS)
@@ -88,7 +98,8 @@ async def _view(test):
     if active:
         kb.row(InlineKeyboardButton(text="🏁 Testni yakunlash", callback_data=f"t:fin:{tid}"))
     kb.row(InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"t:del:{tid}"),
-           InlineKeyboardButton(text="⬅️ Ro'yxat", callback_data="mt:0"))
+           InlineKeyboardButton(text="🔄 Yangilash", callback_data=f"t:v:{tid}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Testlar ro'yxati", callback_data="mt:0"), home_btn())
     return text, kb.as_markup()
 
 
@@ -131,9 +142,10 @@ async def test_excel(callback: CallbackQuery, user) -> None:
         return
     subs = await db.submissions_ranked(test["id"])
     if not subs:
-        await callback.answer("Hozircha hech kim javob yubormagan.", show_alert=True)
+        await callback.answer("Hozircha hech kim javob yubormagan — hisobot bo'sh.", show_alert=True)
         return
-    await callback.answer("Hisobot tayyorlanmoqda…")
+    await callback.answer("📥 Hisobot tayyorlanmoqda…")
+    await callback.bot.send_chat_action(user["id"], "upload_document")
     from ..excel import build_report
 
     data = await asyncio.to_thread(build_report, dict(test), [dict(s) for s in subs])
@@ -223,19 +235,68 @@ async def delete_ok(callback: CallbackQuery, user) -> None:
     if test is None:
         return
     await db.delete_test(test["id"])
+    services.deadlines_changed()
     await callback.answer("Test o'chirildi.")
     text, kb = await _list_page(user["id"], 0)
     await services.edit_or_send(callback, "🗑 Test o'chirildi.\n\n" + text, kb)
 
 
-# ---------------------------------------------------------------- tushunarsiz xabarlar (eng oxirgi handler)
+# ---------------------------------------------------------------- tushunarsiz xabarlar (eng oxirgi handlerlar)
+# Jarayon ichida kutilmagan narsa yuborilganda: hozir aynan nima kutilayotganini eslatamiz
+STATE_HINTS = {
+    "Reg:name": "ism va familiyangizni <b>matn</b> ko'rinishida yozing",
+    "Profile:name": "yangi ism va familiyangizni <b>matn</b> ko'rinishida yozing",
+    "Create:title": "test nomini <b>matn</b> ko'rinishida yozing",
+    "Create:key": "javoblar kalitini <b>matn</b> ko'rinishida yuboring (masalan: <code>abcdabcd</code>)",
+    "Create:points": "ballarni <b>matn</b> ko'rinishida yuboring (masalan: <code>1-10: 1.1; 11-20: 2.1</code>)",
+    "Create:deadline": "muddatni tugmalardan tanlang yoki sanani yozing (masalan: <code>25.12.2026 18:00</code>)",
+    "Create:confirm": "yuqoridagi <b>«✅ Testni yaratish»</b> yoki <b>«⬅️ Orqaga»</b> tugmasini bosing",
+    "Solve:code": "test kodini <b>raqamlar</b> bilan yuboring (masalan: <code>48213</code>)",
+    "Solve:answers": "javoblaringizni <b>matn</b> ko'rinishida yuboring (masalan: <code>abcdabcd</code>)",
+    "Solve:confirm": "yuqoridagi <b>«✅ Yuborish»</b> yoki <b>«✏️ Tuzatish»</b> tugmasini bosing",
+    "RatingSt:code": "test kodini yuboring yoki ro'yxatdan testni tanlang",
+    "Admin:channel": "kanal username'i, ID raqami yoki kanaldan forward qilingan postni yuboring",
+    "Admin:block": "foydalanuvchining ID raqamini yuboring",
+}
+
+
 @router.message()
-async def fallback(message: Message, user) -> None:
+async def fallback(message: Message, state: FSMContext, user) -> None:
+    current = await state.get_state()
+    hint = STATE_HINTS.get(current or "")
+    if hint:
+        back = (current or "").startswith(("Create:", "Solve:"))
+        await message.answer(
+            f"🤔 Bu xabarni qabul qila olmadim.\n\nHozir {hint}.\n\n"
+            "<i>Jarayonni to'xtatish uchun «❌ Bekor qilish»ni bosing.</i>",
+            reply_markup=flow_kb(back=back),
+        )
+        return
+    if current:
+        await state.clear()
     await message.answer(
-        "🤔 Tushunmadim. Quyidagi menyudan foydalaning yoki /help ni bosing.", reply_markup=main_menu(user["id"])
+        "🤔 Bu xabarni tushunmadim.\n\n"
+        "• Test javobini tekshirish uchun <b>test kodini</b> yuboring\n"
+        "• Yoki quyidagi menyudan kerakli bo'limni tanlang 👇",
+        reply_markup=main_menu(user["id"]),
     )
 
 
 @router.callback_query()
-async def fallback_callback(callback: CallbackQuery) -> None:
-    await callback.answer("Bu tugma eskirgan. Amalni menyudan qaytadan boshlang.", show_alert=True)
+async def fallback_callback(callback: CallbackQuery, state: FSMContext, user) -> None:
+    # Eski xabardagi tugma: foydalanuvchi "qotib" qolmasligi uchun yo'l ko'rsatamiz
+    await callback.answer("Bu tugma endi faol emas.")
+    current = await state.get_state()
+    hint = STATE_HINTS.get(current or "")
+    if hint:
+        await callback.bot.send_message(
+            user["id"],
+            f"ℹ️ Bu tugma eski xabarga tegishli.\n\nHozir {hint}.\n\n"
+            "<i>Jarayonni to'xtatish uchun «❌ Bekor qilish»ni bosing.</i>",
+        )
+        return
+    await callback.bot.send_message(
+        user["id"],
+        "ℹ️ Bu tugma eski xabarga tegishli va endi ishlamaydi.\n\nQuyidagi menyudan davom eting 👇",
+        reply_markup=main_menu(user["id"]),
+    )

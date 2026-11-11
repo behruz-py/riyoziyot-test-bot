@@ -102,6 +102,14 @@ def key_preview(questions: list[dict]) -> list[str]:
     return lines
 
 
+def answers_preview(answers: list[str]) -> list[str]:
+    """O'quvchi javoblarini tasdiqlash oynasida ko'rsatish uchun qatorlar."""
+    if all(a == kp.SKIP or (len(a) == 1 and a in kp.LETTERS) for a in answers):
+        cells = [f"{i}.{kp.fmt_answer(a)}" for i, a in enumerate(answers, start=1)]
+        return ["<code>" + "  ".join(cells[i:i + 5]) + "</code>" for i in range(0, len(cells), 5)]
+    return [f"{i}) <code>{escape(kp.fmt_answer(a))}</code>" for i, a in enumerate(answers, start=1)]
+
+
 def points_summary(questions: list[dict]) -> str:
     values = sorted({q["p"] for q in questions})
     total = kp.fmt_num(sum(q["p"] for q in questions))

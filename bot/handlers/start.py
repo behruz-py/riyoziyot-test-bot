@@ -3,13 +3,16 @@ from __future__ import annotations
 from html import escape
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from .. import db
-from ..keyboards import BTN_CANCEL, BTN_HELP, BTN_PROFILE, cancel_kb, main_menu
+from ..keyboards import BTN_BACK, BTN_CANCEL, BTN_HELP, BTN_PROFILE, cancel_kb, home_btn, main_menu
 from ..subscription import PENDING_START
 from . import solve
 
@@ -25,26 +28,41 @@ class Profile(StatesGroup):
     name = State()
 
 
+MENU_TEXT = (
+    "🏠 <b>Asosiy menyu</b>\n\n"
+    "✅ <b>Javobni tekshirish</b> — test kodi bo'yicha javoblaringizni tekshiring\n"
+    "➕ <b>Test yaratish</b> — o'z testingizni o'tkazing\n"
+    "📊 <b>Natijalarim</b> · 📚 <b>Mening testlarim</b> · 🏆 <b>Reyting</b>\n\n"
+    "Kerakli bo'limni tanlang 👇"
+)
+
 HELP_TEXT = (
-    "ℹ️ <b>Botdan foydalanish</b>\n\n"
+    "ℹ️ <b>Yordam</b>\n\n"
+    "<b>🧑‍🎓 Test javobini tekshirish</b>\n"
+    "1. «✅ Javobni tekshirish» tugmasini bosing\n"
+    "2. O'qituvchi bergan <b>test kodini</b> yuboring\n"
+    "3. Javoblaringizni yuboring: <code>abcdabcd</code> yoki <code>1a2b3c4d</code>\n"
+    "4. Javoblarni ko'zdan kechirib, <b>«✅ Yuborish»</b>ni bosing\n\n"
+    "• Javob bermaydigan savolga <code>-</code> qo'ying\n"
+    "• Tezkor usul: <code>12345*abcdabcd</code> (kod*javoblar)\n"
+    "• Har bir testga faqat <b>bir marta</b> javob yuboriladi\n"
+    "• To'g'ri javoblar test yakunlangach ochiladi\n\n"
     "<b>👨‍🏫 Test yaratish</b>\n"
-    "«➕ Test yaratish» → test nomi → to'g'ri javoblar kaliti → ball tizimi → muddat (ixtiyoriy).\n"
-    "Bot sizga <b>test kodi</b> beradi — uni o'quvchilarga tarqatasiz.\n\n"
-    "<b>🔑 Kalit formatlari</b>\n"
-    "• <code>abcdabcd</code> — har bir harf bitta savol\n"
-    "• <code>1a2b3c4d</code> — raqamli\n"
-    "• Ochiq (yozma) javobli savollar bo'lsa, har bir javob yangi qatordan:\n"
-    "<code>1. a\n2. 12.5\n3. x=2</code>\n"
-    "Ochiq javobda bir nechta to'g'ri variant: <code>0.5|1/2</code>\n\n"
-    "<b>🧑‍🎓 Javobni tekshirish</b>\n"
-    "«✅ Javobni tekshirish» → test kodi → javoblaringiz.\n"
-    "Tezkor usul: <code>12345*abcdabcd</code> (kod*javoblar).\n"
-    "Javob bermoqchi bo'lmagan savolga <code>-</code> qo'ying.\n"
-    "❗️ Har bir testga faqat <b>bir marta</b> javob yuborish mumkin.\n\n"
-    "<b>🏆 Natijalar</b>\n"
-    "Natijada to'g'ri javoblar soni, ball, o'rningiz va xato javoblaringiz ko'rsatiladi. "
-    "To'g'ri javoblar test yakunlangach ochiladi. Sertifikatni natija ostidagi tugma orqali olasiz.\n\n"
-    "/cancel — boshlangan amalni bekor qilish"
+    "1. «➕ Test yaratish» → test nomi\n"
+    "2. To'g'ri javoblar kaliti: <code>abcdabcd</code>\n"
+    "3. Ball tizimi va muddat (ixtiyoriy)\n"
+    "4. Bot bergan <b>test kodini</b> o'quvchilarga tarqating\n\n"
+    "Natijalar, Excel hisobot va testni yakunlash — «📚 Mening testlarim» bo'limida.\n\n"
+    "<b>✍️ Ochiq (yozma) javobli savollar</b>\n"
+    "Har bir javob yangi qatordan yoziladi:\n"
+    "<code>1. a\n2. 12.5\n3. x=2</code>\n\n"
+    "<b>🧭 Adashib qolsangiz</b>\n"
+    "«❌ Bekor qilish» yoki /start — istalgan joydan asosiy menyuga qaytaradi."
+)
+
+NAME_ERROR = (
+    "⚠️ Ism va familiya 3–60 belgidan iborat bo'lishi va harflardan tashkil topishi kerak.\n\n"
+    "Qaytadan yozing (masalan: <i>Aliyev Vali</i>):"
 )
 
 
@@ -55,24 +73,40 @@ def valid_name(text: str) -> str | None:
     return None
 
 
+async def send_menu(bot: Bot, user_id: int, text: str = MENU_TEXT) -> None:
+    await bot.send_message(user_id, text, reply_markup=main_menu(user_id))
+
+
 async def enter(bot: Bot, state: FSMContext, user) -> None:
     """Obuna tekshiruvidan o'tgan foydalanuvchini kutib oladi."""
     uid = user["id"]
     if not user["full_name"]:
         await state.set_state(Reg.name)
+        suggestion = valid_name(user["tg_name"] or "")
+        keyboard = (
+            ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text=suggestion)]], resize_keyboard=True,
+                input_field_placeholder="Ism va familiyangiz",
+            )
+            if suggestion else ReplyKeyboardRemove()
+        )
         await bot.send_message(
             uid,
-            "👋 Assalomu alaykum! Test botiga xush kelibsiz.\n\n"
-            "Iltimos, <b>ism va familiyangizni</b> yuboring.\n"
-            "<i>U reyting, hisobot va sertifikatlarda ko'rsatiladi (masalan: Aliyev Vali).</i>",
+            "👋 <b>Assalomu alaykum!</b>\n\n"
+            "Bu bot yordamida test javoblaringizni bir zumda tekshirasiz, natija va reytingni ko'rasiz, "
+            "o'zingiz ham test o'tkaza olasiz.\n\n"
+            "Boshlash uchun <b>ism va familiyangizni</b> yozing — u reyting va sertifikatda ko'rsatiladi.\n"
+            "<i>Masalan: Aliyev Vali</i>"
+            + ("\n\nYoki quyidagi tugmani bosib, Telegram'dagi ismingizni tanlang 👇" if suggestion else ""),
+            reply_markup=keyboard,
         )
         return
-    await bot.send_message(
-        uid, f"🏠 Asosiy menyu. Xush kelibsiz, <b>{escape(user['full_name'])}</b>!", reply_markup=main_menu(uid)
-    )
     payload = PENDING_START.pop(uid, None)
     if payload and payload.startswith("test_") and payload[5:].isdigit():
+        await bot.send_message(uid, f"👋 Xush kelibsiz, <b>{escape(user['full_name'])}</b>!", reply_markup=main_menu(uid))
         await solve.open_test(bot, state, user, payload[5:])
+        return
+    await send_menu(bot, uid, f"👋 Xush kelibsiz, <b>{escape(user['full_name'])}</b>!\n\n{MENU_TEXT}")
 
 
 @router.message(CommandStart())
@@ -102,10 +136,14 @@ async def noop(callback: CallbackQuery) -> None:
 async def reg_name(message: Message, state: FSMContext, user) -> None:
     name = valid_name(message.text)
     if not name:
-        await message.answer("Ism familiya 3–60 belgidan iborat bo'lishi kerak. Qaytadan yuboring:")
+        await message.answer(NAME_ERROR)
         return
     await db.set_full_name(user["id"], name)
     await state.clear()
+    await message.answer(
+        f"✅ Rahmat, <b>{escape(name)}</b>! Ro'yxatdan o'tdingiz.\n"
+        "<i>Ismni keyinroq «👤 Profil» bo'limida o'zgartirishingiz mumkin.</i>"
+    )
     await enter(message.bot, state, await db.get_user(user["id"]))
 
 
@@ -121,32 +159,49 @@ async def need_reg_callback(callback: CallbackQuery, state: FSMContext, user) ->
     await enter(callback.bot, state, user)
 
 
+@router.callback_query(F.data == "home")
+async def home(callback: CallbackQuery, state: FSMContext, user) -> None:
+    await state.clear()
+    await callback.answer()
+    await send_menu(callback.bot, user["id"])
+
+
 @router.message(Command("cancel"))
 @router.message(F.text == BTN_CANCEL)
 async def cancel(message: Message, user) -> None:
     # Holat UserMiddleware ichida tozalangan
-    await message.answer("Bekor qilindi.", reply_markup=main_menu(user["id"]))
+    await send_menu(message.bot, user["id"], "❌ Bekor qilindi.\n\n" + MENU_TEXT)
+
+
+@router.message(StateFilter(None), F.text == BTN_BACK)
+async def back_to_menu(message: Message, user) -> None:
+    await send_menu(message.bot, user["id"])
 
 
 @router.message(Command("help"))
 @router.message(F.text == BTN_HELP)
 async def help_cmd(message: Message, user) -> None:
-    await message.answer(HELP_TEXT, reply_markup=main_menu(user["id"]))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Javobni tekshirish", callback_data="go:check"),
+        InlineKeyboardButton(text="➕ Test yaratish", callback_data="go:create"),
+    ]])
+    await message.answer(HELP_TEXT, reply_markup=kb)
 
 
 @router.message(F.text == BTN_PROFILE)
 async def profile(message: Message, user) -> None:
     created = await db.count_tests_by_owner(user["id"])
     solved = await db.count_submissions_by_user(user["id"])
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="✏️ Ismni o'zgartirish", callback_data="profile:name")]]
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Ismni o'zgartirish", callback_data="profile:name")],
+        [home_btn()],
+    ])
     await message.answer(
         "👤 <b>Profil</b>\n\n"
         f"Ism familiya: <b>{escape(user['full_name'])}</b>\n"
-        f"ID: <code>{user['id']}</code>\n"
-        f"Yaratgan testlaringiz: <b>{created}</b>\n"
-        f"Ishlagan testlaringiz: <b>{solved}</b>",
+        f"ID: <code>{user['id']}</code>\n\n"
+        f"✅ Ishlagan testlaringiz: <b>{solved}</b> ta\n"
+        f"📚 Yaratgan testlaringiz: <b>{created}</b> ta",
         reply_markup=kb,
     )
 
@@ -157,9 +212,9 @@ async def profile_name(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Profile.name)
     await callback.bot.send_message(
         callback.from_user.id,
-        "Yangi ism va familiyangizni yuboring.\n"
-        "<i>Avval topshirilgan testlardagi ism o'zgarmaydi.</i>",
-        reply_markup=cancel_kb(),
+        "✏️ Yangi <b>ism va familiyangizni</b> yozing.\n\n"
+        "<i>Avval topshirilgan testlardagi ismingiz o'zgarmaydi.</i>",
+        reply_markup=cancel_kb("Ism va familiya"),
     )
 
 
@@ -167,8 +222,8 @@ async def profile_name(callback: CallbackQuery, state: FSMContext) -> None:
 async def profile_name_set(message: Message, state: FSMContext, user) -> None:
     name = valid_name(message.text)
     if not name:
-        await message.answer("Ism familiya 3–60 belgidan iborat bo'lishi kerak. Qaytadan yuboring:")
+        await message.answer(NAME_ERROR)
         return
     await db.set_full_name(user["id"], name)
     await state.clear()
-    await message.answer(f"✅ Saqlandi: <b>{escape(name)}</b>", reply_markup=main_menu(user["id"]))
+    await message.answer(f"✅ Ismingiz saqlandi: <b>{escape(name)}</b>", reply_markup=main_menu(user["id"]))

@@ -21,6 +21,8 @@ from aiogram.types import (  # noqa: E402
 
 from bot import config, db, keyboards as kb, services, subscription  # noqa: E402
 from bot.__main__ import build_dispatcher  # noqa: E402
+from bot.handlers import admin as admin_h, create as create_h, mytests as mytests_h  # noqa: E402
+from bot.handlers import solve as solve_h, start as start_h  # noqa: E402
 
 config.ADMIN_IDS.clear()
 config.ADMIN_IDS.add(1)
@@ -103,6 +105,26 @@ async def cb(uid: int, data: str) -> str:
     return texts(start)
 
 
+async def photo(uid: int) -> str:
+    """Matn o'rniga rasm yuborish (kutilmagan kontent)."""
+    from aiogram.types import PhotoSize
+
+    start = len(session.calls)
+    m = Message(message_id=next(ids), date=datetime.now(), chat=Chat(id=uid, type="private"),
+                from_user=User(id=uid, is_bot=False, first_name=f"User{uid}"),
+                photo=[PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)])
+    await dp.feed_update(bot, Update(update_id=next(ids), message=m))
+    return texts(start)
+
+
+def restart():
+    """Server qayta ishga tushishini taqlid qiladi: xotiradagi holat yo'qoladi, bazadagisi qoladi."""
+    global dp
+    for router in (start_h.router, admin_h.router, create_h.router, solve_h.router, mytests_h.router):
+        router._parent_router = None
+    dp = build_dispatcher()
+
+
 def last_markup_data() -> list[str]:
     """Oxirgi yuborilgan inline klaviaturadagi callback_data lar."""
     for m in reversed(session.calls):
@@ -162,13 +184,12 @@ async def webhook_check():
                                  headers={"X-Telegram-Bot-Api-Secret-Token": "sekret"}) as r:
                 assert r.status == 200, r.status
             await asyncio.sleep(0.5)
-            assert "Botdan foydalanish" in texts(start), texts(start)
+            assert "Yordam</b>" in texts(start), texts(start)
     finally:
         await runner.cleanup()
 
 
 async def scenario():
-
     # --- admin: kanal qo'shish
     out = await msg(ADMIN, "/start")
     assert "ism va familiyangizni" in out
@@ -177,6 +198,8 @@ async def scenario():
     assert "Admin panel" in out
     await cb(ADMIN, "adm:ch")
     await cb(ADMIN, "adm:chadd")
+    out = await photo(ADMIN)  # forward bo'lmagan rasm
+    assert "Tushunmadim" in out or "tushunmadim" in out.lower(), out
     out = await msg(ADMIN, "@riyoziyot")
     assert "qo'shildi" in out, out
     assert len(await db.get_channels()) == 1
@@ -194,31 +217,54 @@ async def scenario():
     assert "ism va familiyangizni" in out, out
     out = await msg(S1, kb.BTN_CREATE)  # ro'yxatdan o'tmasdan menyu ishlamasligi kerak
     assert "ism va familiyangizni" in out, out
+    out = await photo(S1)
+    assert "ism va familiyangizni" in out, out
     out = await msg(S1, "Aliyev Vali")
-    assert "Asosiy menyu" in out and "topilmadi" in out, out  # deep-link saqlanib qolgan, test yo'q
+    assert "Ro'yxatdan o'tdingiz" in out and "topilmadi" in out, out  # deep-link saqlanib qolgan, test yo'q
+    out = await msg(S1, kb.BTN_BACK)  # kod kutish holatidan orqaga -> menyu
+    assert "Asosiy menyu" in out, out
 
     await register(TEACHER, "Ustoz Karimov")
     await register(S2, "Bobur <b>Mirzo</b>")
     await register(S3, "Salimova Dilnoza")
 
-    # --- test yaratish (aralash, alohida ballar, muddatsiz)
+    # --- test yaratish (aralash, alohida ballar, muddatsiz) + orqaga qaytishlar
     out = await msg(TEACHER, kb.BTN_CREATE)
-    assert "Test nomini" in out
-    await msg(TEACHER, "Algebra <9-sinf> & nazorat")
+    assert "1-qadam" in out, out
+    out = await msg(TEACHER, "ab")
+    assert "3–100 belgidan" in out, out
+    out = await photo(TEACHER)
+    assert "test nomini" in out, out  # holatga mos yo'l-yo'riq
+    out = await msg(TEACHER, "Algebra <9-sinf> & nazorat")
+    assert "2-qadam" in out, out
+    out = await msg(TEACHER, kb.BTN_BACK)
+    assert "1-qadam" in out, out
+    out = await msg(TEACHER, "Algebra <9-sinf> & nazorat")
+    assert "2-qadam" in out, out
     out = await msg(TEACHER, "1a2b4c")
     assert "ketma-ket emas" in out
     out = await msg(TEACHER, "1. a\n2. b\n3. 0.5|1/2\n4. d\n5. Toshkent")
-    assert "5</b> ta savol" in out and "variantli: 3, ochiq: 2" in out, out
+    assert "5 ta savol" in out and "variantli: 3, ochiq: 2" in out and "3-qadam" in out, out
     out = await cb(TEACHER, "cr:p:custom")
     assert "savollar: ball" in out
+    out = await msg(TEACHER, kb.BTN_BACK)  # ballardan kalitga qaytish - kalit saqlangan
+    assert "Kalit qabul qilindi" in out and "Toshkent" in out, out
+    await cb(TEACHER, "cr:p:custom")
     out = await msg(TEACHER, "1-9: 2")
     assert "noto'g'ri" in out
     out = await msg(TEACHER, "1-2: 1.1; 3: 3.1")
-    assert "Maksimal ball: <b>7.3</b>" in out, out
+    assert "Maksimal ball: <b>7.3</b>" in out and "4-qadam" in out, out
     out = await msg(TEACHER, "01.01.2020 10:00")
-    assert "kelajakdagi" in out
+    assert "o'tib ketgan" in out
+    out = await msg(TEACHER, "ertaga")
+    assert "tushunmadim" in out
     out = await cb(TEACHER, "cr:d:0")
-    assert "Tekshirib oling" in out and "belgilanmagan" in out and "&lt;9-sinf&gt; &amp;" in out, out
+    assert "Hammasi to'g'rimi" in out and "belgilanmagan" in out and "&lt;9-sinf&gt; &amp;" in out, out
+    out = await cb(TEACHER, "cr:back")
+    assert "4-qadam" in out, out
+    restart()  # server qayta ishga tushdi: yaratish jarayoni davom etishi kerak
+    out = await cb(TEACHER, "cr:d:0")
+    assert "Hammasi to'g'rimi" in out and "jami 7.3" in out, out
     out = await cb(TEACHER, "cr:ok")
     assert "Test yaratildi" in out and "start=test_" in out, out
     tests = await db.tests_by_owner(TEACHER, 10, 0)
@@ -228,40 +274,71 @@ async def scenario():
 
     # --- muallif o'z testiga javob yubora olmaydi
     out = await msg(TEACHER, f"{code}*abcda")
-    assert "O'zingiz yaratgan" in out, out
+    assert "o'zingiz yaratgan test" in out, out
 
     # --- S1: menyu orqali, xatolar bilan
-    await msg(S1, kb.BTN_CHECK)
+    out = await msg(S1, kb.BTN_CHECK)
+    assert "test kodini" in out
+    out = await msg(S1, "abc")
+    assert "faqat raqamlardan" in out
     out = await msg(S1, "99")
     assert "topilmadi" in out
     out = await msg(S1, code)
-    assert "ochiq (yozma) javobli" in out and "3, 5" in out, out
+    assert "Ochiq (yozma) javobli savollar: <b>3, 5</b>" in out, out
+    out = await msg(S1, kb.BTN_BACK)  # javoblardan kod so'rashga qaytish
+    assert "test kodini" in out, out
+    await msg(S1, code)
     out = await msg(S1, "abcd")
     assert "5</b> ta savol bor" in out, out
     out = await msg(S1, "1. a\n2. zzz\n3. 1\n4. d\n5. x")
     assert "variantli" in out, out
+    out = await msg(S1, "1. a\n2. a\n3. 2/4\n4. -\n5. toshkent")
+    assert "Javoblaringizni tekshiring" in out and "Javobsiz qoldirilgan savollar: <b>1</b>" in out, out
+    assert await db.get_submission(tid, S1) is None, "tasdiqlanmasdan saqlandi"
+    out = await photo(S1)
+    assert "«✅ Yuborish»" in out, out
+    out = await cb(S1, "sv:edit")
+    assert "Javoblaringizni bitta xabarda" in out, out
     out = await msg(S1, "1. a\n2. c\n3. 2/4\n4. -\n5. toshkent")
+    assert "Javoblaringizni tekshiring" in out, out
+    restart()  # tasdiqlash oldidan server qayta ishga tushdi
+    out = await cb(S1, "sv:ok")
     assert "qabul qilindi" in out and "3 / 5" in out and "5.2 / 7.3" in out, out
     assert "1 / 1" in out and "Xato javoblar (1 ta)" in out and "Javobsiz (1 ta):</b> 4" in out, out
+    assert "siz: <code>C</code>" in out, out
     assert "to'g'ri: <code>" not in out, "kalit test tugamasdan oshkor bo'ldi"
     # qayta yuborish
     out = await msg(S1, f"{code}*1. a\n2. b\n3. 0.5\n4. d\n5. toshkent")
     assert "avval javob yuborgansiz" in out, out
+    out = await msg(S1, code)  # holatsiz yuborilgan raqam - test kodi
+    assert "avval javob yuborgansiz" in out, out
+    out = await cb(S1, "sv:ok")  # eskirgan tugma
+    assert "eski xabarga tegishli" in out and "menyudan davom eting" in out, out
 
     # --- S2: tezkor format, hammasi to'g'ri; deep link orqali S3
     out = await msg(S2, f"{code}*a;b;0,5;d;TOSHKENT")
+    assert "Javoblaringizni tekshiring" in out, out
+    out = await cb(S2, "sv:ok")
     assert "Barcha javoblaringiz to'g'ri" in out and "7.3 / 7.3" in out and "1 / 2" in out, out
     out = await msg(S3, f"/start test_{code}")
     assert "Savollar soni" in out, out
-    out = await msg(S3, "1. b\n2. b\n3. 7\n4. d\n5. -")
+    await msg(S3, "1. b\n2. b\n3. 7\n4. d\n5. -")
+    out = await cb(S3, "sv:ok")
     assert "2 / 5" in out and "3 / 3" in out, out  # 1.1 + 1 = 2.1 ball, 3-o'rin
+    start = len(session.calls)
+    await cb(S3, "sv:ok")  # ikki marta bosish
+    assert (await db.count_submissions(tid)) == 3
 
     # --- reyting
     out = await cb(S1, f"rating:{tid}")
     assert out.index("Bobur") < out.index("Aliyev") < out.index("Salimova"), out
     assert "&lt;b&gt;Mirzo&lt;/b&gt;" in out, "HTML ekranlanmagan"
-    start = len(session.calls)
-    await cb(ADMIN, f"rating:{tid}")
+    out = await msg(S1, kb.BTN_RATING)
+    assert f"rating:{tid}" in last_markup_data(), last_markup_data()
+    out = await cb(S1, f"rating:{tid}")
+    assert "Bobur" in out
+    out = await msg(S1, "tushunarsiz")  # reytingdan keyin holat yopilgan bo'lishi kerak
+    assert "tushunmadim" in out, out
     await msg(ADMIN, kb.BTN_RATING)
     out = await msg(ADMIN, code)
     assert "Bobur" in out
@@ -269,11 +346,26 @@ async def scenario():
     start = len(session.calls)
     await cb(77, f"rating:{tid}")
     assert "SendMessage" not in names(start), "begona reytingni ko'rdi"
+    await msg(77, kb.BTN_RATING)
+    out = await msg(77, code)
+    assert "faqat unda qatnashganlar" in out, out
     start = len(session.calls)
     await cb(77, f"t:res:{tid}")
     assert "SendMessage" not in names(start), "begona muallif paneliga kirdi"
     await cb(77, f"t:delok:{tid}")
     assert await db.get_test(tid) is not None, "begona testni o'chirdi"
+    out = await msg(77, kb.BTN_MY_RESULTS)
+    assert "hali birorta testga" in out and "go:check" in last_markup_data(), out
+    out = await msg(77, kb.BTN_MY_TESTS)
+    assert "hali test yaratmagansiz" in out and "go:create" in last_markup_data(), out
+    out = await cb(77, "go:create")
+    assert "1-qadam" in out, out
+    out = await cb(77, "home")
+    assert "Asosiy menyu" in out, out
+    out = await cb(77, "go:check")
+    assert "test kodini" in out, out
+    out = await msg(77, kb.BTN_CANCEL)
+    assert "Bekor qilindi" in out and "Asosiy menyu" in out, out
 
     # --- natijalarim, sertifikat
     out = await msg(S1, kb.BTN_MY_RESULTS)
@@ -289,6 +381,7 @@ async def scenario():
     assert f"t:v:{tid}" in last_markup_data()
     out = await cb(TEACHER, f"t:v:{tid}")
     assert "Ishtirokchilar: <b>3</b>" in out and "Faol" in out, out
+    assert "home" in last_markup_data() and "mt:0" in last_markup_data()
     out = await cb(TEACHER, f"t:res:{tid}")
     assert "O'rtacha ball" in out, out
     start = len(session.calls)
@@ -323,6 +416,8 @@ async def scenario():
     await cb(TEACHER, "cr:ok")
     t2 = (await db.tests_by_owner(TEACHER, 10, 0))[0]
     out = await msg(S1, f"{t2['code']}*abca")
+    assert "1.A  2.B  3.C  4.A" in out, out
+    out = await cb(S1, "sv:ok")
     assert "3 / 4" in out, out
     await db._exec("UPDATE tests SET deadline='2000-01-01 00:00:00' WHERE id=?", (t2["id"],))
     out = await msg(S2, f"{t2['code']}*abcd")
@@ -339,8 +434,11 @@ async def scenario():
     await msg(S1, kb.BTN_CHECK)
     out = await msg(S1, kb.BTN_PROFILE)
     assert "Profil" in out and "Ishlagan testlaringiz: <b>2</b>" in out, out
+    await cb(S1, "profile:name")
+    out = await msg(S1, kb.BTN_BACK)  # «Orqaga» ism sifatida saqlanib qolmasligi kerak
+    assert "Asosiy menyu" in out and (await db.get_user(S1))["full_name"] == "Aliyev Vali", out
     out = await msg(S1, "tushunarsiz narsa")
-    assert "Tushunmadim" in out
+    assert "tushunmadim" in out
 
     # --- o'chirish
     await cb(TEACHER, f"t:del:{tid}")
@@ -356,7 +454,7 @@ async def scenario():
     assert "Statistika" not in texts(start) and "Admin panel" not in out
     await cb(ADMIN, "adm:block")
     out = await msg(ADMIN, "77")
-    assert "Bloklandi" in out
+    assert "Bloklandi" in out and "Admin panel" in out
     start = len(session.calls)
     await msg(77, kb.BTN_HELP)
     assert len(session.calls) == start, "bloklangan foydalanuvchiga javob berildi"
@@ -377,7 +475,7 @@ async def scenario():
     ch = (await db.get_channels())[0]
     await cb(ADMIN, f"adm:chdel:{ch['id']}")
     out = await msg(S3, kb.BTN_HELP)
-    assert "Botdan foydalanish" in out
+    assert "Yordam</b>" in out
 
 
 if __name__ == "__main__":
