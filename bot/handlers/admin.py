@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from datetime import datetime, timedelta
 
-from .. import db, keyparser as kp, moderation, services, subscription
+from .. import daily, db, keyparser as kp, moderation, services, subscription
 from ..config import ADMIN_IDS, TZ, is_admin
 from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, home_btn, main_menu
 
@@ -40,6 +40,8 @@ PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📡 Majburiy kanallar", callback_data="adm:ch")],
     [InlineKeyboardButton(text="🚫 Bloklash / blokdan chiqarish", callback_data="adm:block")],
     [InlineKeyboardButton(text="🧹 Taqiqlangan so'zlar", callback_data="adm:words")],
+    [InlineKeyboardButton(text="💾 Zaxira nusxa", callback_data="adm:backup"),
+     InlineKeyboardButton(text="🗓 Kunlik hisobot", callback_data="adm:daily")],
     [home_btn()],
 ])
 PANEL_TEXT = "🛠 <b>Admin panel</b>\n\nKerakli bo'limni tanlang 👇"
@@ -497,3 +499,26 @@ async def word_add_got(message: Message, state: FSMContext) -> None:
     )
     text, kb = await _words_view()
     await message.answer(text, reply_markup=kb)
+
+
+# ---------------------------------------------------------------- zaxira nusxa va kunlik hisobot
+@router.callback_query(F.data == "adm:backup")
+async def backup_now(callback: CallbackQuery) -> None:
+    await callback.answer("💾 Zaxira nusxa tayyorlanmoqda…")
+    await callback.bot.send_chat_action(callback.from_user.id, "upload_document")
+    document, caption = await daily.backup_file()
+    await callback.bot.send_document(callback.from_user.id, document, caption=caption)
+
+
+@router.callback_query(F.data == "adm:daily")
+async def daily_now(callback: CallbackQuery) -> None:
+    from ..config import DAILY_HOUR
+
+    schedule = (
+        f"Hisobot va zaxira nusxa har kuni soat <b>{DAILY_HOUR:02d}:00</b> dan keyin avtomatik yuboriladi."
+        if DAILY_HOUR >= 0 else "Avtomatik yuborish o'chirilgan (DAILY_HOUR=-1)."
+    )
+    await callback.answer()
+    await callback.bot.send_message(
+        callback.from_user.id, f"{await daily.report_text()}\n\n<i>{schedule}</i>", reply_markup=BACK_TO_PANEL
+    )

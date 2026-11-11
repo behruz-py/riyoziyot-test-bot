@@ -71,6 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_sub_user ON submissions(user_id);
 CREATE TABLE IF NOT EXISTS banned_words (
     word  TEXT PRIMARY KEY
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS fsm (
     user_id     {BIG} PRIMARY KEY,
     state       TEXT,
@@ -557,3 +561,16 @@ async def add_banned_word(word: str) -> None:
 
 async def delete_banned_word(word: str) -> None:
     await _exec("DELETE FROM banned_words WHERE word=?", (word,))
+
+
+# ---------------------------------------------------------------- sozlamalar (kalit -> qiymat)
+async def get_setting(key: str) -> str | None:
+    row = await _one("SELECT value FROM settings WHERE key=?", (key,))
+    return row["value"] if row else None
+
+
+async def set_setting(key: str, value: str) -> None:
+    await _exec(
+        "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )

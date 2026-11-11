@@ -19,7 +19,7 @@ from aiogram.types import (  # noqa: E402
     CallbackQuery, Chat, ChatMemberAdministrator, ChatMemberLeft, ChatMemberMember, Message, Update, User,
 )
 
-from bot import config, db, keyboards as kb, services, subscription  # noqa: E402
+from bot import backup, config, daily, db, keyboards as kb, services, subscription  # noqa: E402
 from bot.__main__ import build_dispatcher  # noqa: E402
 from bot.handlers import admin as admin_h, create as create_h, mytests as mytests_h  # noqa: E402
 from bot.handlers import solve as solve_h, start as start_h  # noqa: E402
@@ -149,9 +149,61 @@ async def main():
     try:
         await scenario()
         await webhook_check()
+        await daily_and_backup_check()
     finally:
         await db.close()  # aks holda xato chiqqanda aiosqlite oqimi jarayonni ushlab qoladi
     print("flow: OK")
+
+
+async def daily_and_backup_check():
+    """Kunlik hisobot bir kunda faqat bir marta yuboriladi; zaxira nusxa to'liq tiklanadi."""
+    # qo'lda: admin paneldan
+    start = len(session.calls)
+    await cb(ADMIN, "adm:backup")
+    assert "SendDocument" in names(start) and "zaxira nusxasi" in texts(start), names(start)
+    out = await cb(ADMIN, "adm:daily")
+    assert "Kunlik hisobot" in out and "Yangi foydalanuvchilar: <b>+6</b>" in out, out
+    start = len(session.calls)
+    await cb(S1, "adm:backup")  # oddiy foydalanuvchi ololmaydi
+    assert "SendDocument" not in names(start)
+
+    # avtomatik: soat yetganda bir marta
+    config.DAILY_HOUR = 0
+    for expected in (1, 1):  # ikkinchi ishga tushirish (qayta yoqilgan server) takror yubormaydi
+        task = asyncio.create_task(daily.daily_loop(bot, interval=0.05))
+        await asyncio.sleep(0.4)
+        task.cancel()
+        sent = [m for m in session.calls[start:] if type(m).__name__ == "SendDocument"]
+        assert len(sent) == expected, len(sent)
+    assert "Kunlik hisobot" in texts(start)
+    config.DAILY_HOUR = 24  # hali soati kelmagan
+    await db.set_setting(daily.SETTING_KEY, "2000-01-01")
+    task = asyncio.create_task(daily.daily_loop(bot, interval=0.05))
+    await asyncio.sleep(0.3)
+    task.cancel()
+    assert len([m for m in session.calls[start:] if type(m).__name__ == "SendDocument"]) == 1
+
+    # zaxira -> bo'sh bazaga tiklash (faqat SQLite rejimida; PostgreSQL alohida tekshiriladi)
+    if os.getenv("TEST_DATABASE_URL"):
+        return
+    data = await backup.dump()
+    before = backup.summary(data)
+    assert before["users"] == 6 and before["tests"] == 1 and before["submissions"] == 1, before
+    try:
+        await backup.restore(data)
+        raise AssertionError("bo'sh bo'lmagan bazaga tiklashga ruxsat berildi")
+    except RuntimeError:
+        pass
+    old_test = (await db.tests_by_owner(TEACHER, 1, 0))[0]
+    await db.close()
+    await db.init(Path(tempfile.mkdtemp()) / "restored.db")
+    assert await backup.restore(data) == before
+    restored = await db.get_test(old_test["id"])
+    assert restored["code"] == old_test["code"] and restored["questions"] == old_test["questions"]
+    assert (await db.get_user(S1))["full_name"] == "Aliyev Vali"
+    assert await db.get_submission(old_test["id"], S1) is not None
+    new_test = await db.create_test(TEACHER, "Tiklangandan keyin", [{"t": "c", "a": "a", "p": 1.0}], None)
+    assert new_test["id"] > old_test["id"]
 
 
 async def webhook_check():

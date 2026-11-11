@@ -16,6 +16,7 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 - **Muallif paneli**: natijalar, Excel hisobot (reyting + har bir savol tahlili), kalit, ulashish, yakunlash, o'chirish.
 - **Majburiy obuna**: bir yoki bir nechta kanal, admin paneldan boshqariladi.
 - **Admin panel**: kengaytirilgan statistika (umumiy, 7 kunlik dinamika, eng faollar, foydalanuvchilar ro'yxati Excel'da), barchaga xabar tarqatish, kanallar, foydalanuvchini bloklash.
+- **Kunlik hisobot va zaxira nusxa**: har kuni `DAILY_HOUR` (standart 21:00) dan keyin adminlarga kun xulosasi va bazaning zaxira fayli yuboriladi. Qo'lda: admin panel -> «💾 Zaxira nusxa».
 - **Nomaqbul ismlardan himoya** (uch qatlam):
   1. Avtomatik filtr: ism-familiya va test nomlarida so'kinish so'zlari (o'zbek, rus, ingliz; kirill/lotin, bo'shliq yoki belgi bilan yozilgani ham). Admin qo'shimcha so'z kirita oladi.
   2. Test muallifi: «👥 Ishtirokchilar» bo'limida istalgan ishtirokchini reytingdan chiqaradi yoki adminga shikoyat yuboradi.
@@ -88,3 +89,14 @@ Bepul Render xizmati 15 daqiqa so'rov kelmasa uxlaydi. Telegram xabari uni uyg'o
 - **Bitta token — bitta joy.** Render'da ishlayotgan bot tokeni bilan kompyuterda `python -m bot` ishga tushirilsa, webhook o'chadi va Render'dagi bot javob bermay qoladi (qayta deploy qilguncha). Mahalliy sinov uchun @BotFather'dan alohida test-bot oching.
 - Mahalliy SQLite'dagi ma'lumotlar Neon'ga avtomatik ko'chmaydi.
 - PostgreSQL'da sinash: `TEST_DATABASE_URL=postgresql://... python -m tests.test_flow` (bo'sh baza kerak).
+
+## Zaxiradan tiklash
+
+Bot yuborgan `zaxira_....json.gz` faylini **bo'sh** bazaga tiklash:
+
+```powershell
+# .env ichida DATABASE_URL (yangi Neon bazasi) yoki DB_PATH ko'rsatilgan bo'lsin
+.venv\Scripts\python -m bot.backup restore zaxira_2026-11-11_21-00.json.gz
+```
+
+Baza bo'sh bo'lmasa, tiklash rad etiladi (mavjud ma'lumot ustiga yozilmaydi). Nusxa SQLite va PostgreSQL uchun bir xil — biridan olib, ikkinchisiga tiklash mumkin.

@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, ErrorEvent
 
-from . import config, db, services
+from . import config, daily, db, services
 from .handlers import admin, create, mytests, solve, start
 from .middlewares import SubscriptionMiddleware, UserMiddleware
 from .storage import DbStorage
@@ -66,6 +66,7 @@ async def main() -> None:
     log.info("Bot ishga tushdi: @%s", me.username)
 
     watcher = asyncio.create_task(services.deadline_watcher(bot))
+    daily_task = asyncio.create_task(daily.daily_loop(bot))
     try:
         if config.WEBHOOK_URL:
             await run_webhook(bot, dp)
@@ -75,6 +76,7 @@ async def main() -> None:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         watcher.cancel()
+        daily_task.cancel()
         await db.close()
         await bot.session.close()
 

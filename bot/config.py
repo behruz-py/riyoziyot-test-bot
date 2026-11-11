@@ -26,6 +26,9 @@ PORT: int = int(os.getenv("PORT", "8080"))
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Tashkent"))
 
+# Adminlarga kunlik hisobot va zaxira nusxa yuboriladigan soat (mahalliy vaqt, 0-23). -1 - o'chirilgan
+DAILY_HOUR: int = int(os.getenv("DAILY_HOUR", "21"))
+
 # Cheklovlar
 MAX_QUESTIONS = 200
 MAX_OPEN_ANSWER_LEN = 60
