@@ -36,7 +36,8 @@ class Admin(StatesGroup):
 
 PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="📊 Statistika", callback_data="adm:stats")],
-    [InlineKeyboardButton(text="📢 Xabar tarqatish", callback_data="adm:bc")],
+    [InlineKeyboardButton(text="📢 Xabar tarqatish", callback_data="adm:bc"),
+     InlineKeyboardButton(text="📌 Pinni olib tashlash", callback_data="adm:unpin")],
     [InlineKeyboardButton(text="📡 Majburiy kanallar", callback_data="adm:ch")],
     [InlineKeyboardButton(text="🚫 Bloklash / blokdan chiqarish", callback_data="adm:block")],
     [InlineKeyboardButton(text="🧹 Taqiqlangan so'zlar", callback_data="adm:words")],
@@ -185,8 +186,10 @@ async def bc_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Admin.broadcast)
     await callback.bot.send_message(
         callback.from_user.id,
-        "📢 Barcha foydalanuvchilarga yuboriladigan xabarni yuboring "
-        "(matn, rasm, video — istalgan turdagi bitta xabar).",
+        "📢 <b>Xabar tarqatish</b>\n\n"
+        "Barcha foydalanuvchilarga yuboriladigan xabarni yuboring — matn, rasm, video yoki fayl "
+        "(bitta xabar).\n\n"
+        "<i>Yuborishdan oldin tasdiqlash so'raladi; xabarni foydalanuvchilar chatida pin qilish ham mumkin.</i>",
         reply_markup=cancel_kb(),
     )
 
@@ -195,35 +198,47 @@ async def bc_start(callback: CallbackQuery, state: FSMContext) -> None:
 async def bc_message(message: Message, state: FSMContext) -> None:
     await state.clear()
     count = len(await db.all_user_ids())
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=f"✅ Yuborish ({count} kishi)", callback_data=f"adm:bcgo:{message.message_id}"),
-        InlineKeyboardButton(text="❌ Bekor qilish", callback_data="adm:bcno"),
-    ]])
-    await message.reply("Yuqoridagi xabar barcha foydalanuvchilarga yuborilsinmi?", reply_markup=kb)
+    mid = message.message_id
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ Yuborish ({count} kishi)", callback_data=f"adm:bcgo:{mid}")],
+        [InlineKeyboardButton(text="📌 Yuborish va pin qilish", callback_data=f"adm:bcpin:{mid}")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="adm:bcno")],
+    ])
+    await message.reply(
+        "Yuqoridagi xabar barcha foydalanuvchilarga yuborilsinmi?\n\n"
+        "<i>📌 Pin qilinsa, xabar har bir foydalanuvchining bot bilan chatida tepada turadi — "
+        "muhim e'lonlar uchun.</i>",
+        reply_markup=kb,
+    )
     await message.answer("👆 Tasdiqlang yoki bekor qiling.", reply_markup=main_menu(message.from_user.id))
 
 
 @router.callback_query(F.data == "adm:bcno")
 async def bc_cancel(callback: CallbackQuery) -> None:
-    await services.edit_or_send(callback, "❌ Xabar tarqatish bekor qilindi.", BACK_TO_PANEL)
+    await services.edit_or_send(callback, "❌ Bekor qilindi.", BACK_TO_PANEL)
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("adm:bcgo:"))
+@router.callback_query(F.data.startswith("adm:bcgo:") | F.data.startswith("adm:bcpin:"))
 async def bc_go(callback: CallbackQuery) -> None:
-    message_id = int(callback.data.split(":")[2])
-    await services.edit_or_send(callback, "⏳ Xabar tarqatish boshlandi. Tugagach hisobot yuboraman.")
+    _, action, message_id = callback.data.split(":")
+    pin = action == "bcpin"
+    await services.edit_or_send(
+        callback,
+        "⏳ Xabar tarqatish boshlandi" + (" (pin qilinadi)" if pin else "") + ". Tugagach hisobot yuboraman.",
+    )
     await callback.answer()
-    services.spawn(_broadcast(callback.bot, callback.from_user.id, message_id))
+    services.spawn(_broadcast(callback.bot, callback.from_user.id, int(message_id), pin))
 
 
-async def _broadcast(bot: Bot, admin_id: int, message_id: int) -> None:
-    sent = blocked = failed = 0
+async def _for_each_user(bot: Bot, action) -> tuple[int, int, int]:
+    """Har bir foydalanuvchi uchun action(user_id) ni bajaradi. Qaytaradi: (muvaffaqiyatli, bloklagan, xato)."""
+    done = blocked = failed = 0
     for uid in await db.all_user_ids():
         for attempt in range(2):
             try:
-                await bot.copy_message(uid, admin_id, message_id)
-                sent += 1
+                await action(uid)
+                done += 1
                 break
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)
@@ -238,10 +253,75 @@ async def _broadcast(bot: Bot, admin_id: int, message_id: int) -> None:
                 log.warning("Tarqatishda xato (%s): %s", uid, e)
                 break
         await asyncio.sleep(0.05)
+    return done, blocked, failed
+
+
+async def _broadcast(bot: Bot, admin_id: int, message_id: int, pin: bool = False) -> None:
+    pinned = 0
+
+    async def send(uid: int) -> None:
+        nonlocal pinned
+        copy = await bot.copy_message(uid, admin_id, message_id)
+        if pin:
+            try:
+                await bot.pin_chat_message(uid, copy.message_id, disable_notification=True)
+                pinned += 1
+            except TelegramAPIError as e:  # xabar yetib bordi, faqat pin bo'lmadi
+                log.warning("Pin qilib bo'lmadi (%s): %s", uid, e)
+
+    sent, blocked, failed = await _for_each_user(bot, send)
+    text = f"📢 <b>Tarqatish yakunlandi</b>\n\n✅ Yetkazildi: {sent}\n"
+    kb = BACK_TO_PANEL
+    if pin:
+        text += f"📌 Pin qilindi: {pinned}\n"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📌 Pinni olib tashlash", callback_data="adm:unpin")],
+            [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel")],
+        ])
+    text += f"🚫 Botni bloklagan: {blocked}\n⚠️ Xato: {failed}"
+    try:
+        await bot.send_message(admin_id, text, reply_markup=kb)
+    except TelegramAPIError:
+        pass
+
+
+@router.callback_query(F.data == "adm:unpin")
+async def unpin_ask(callback: CallbackQuery) -> None:
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Ha, olib tashlash", callback_data="adm:unpinok"),
+        InlineKeyboardButton(text="⬅️ Yo'q", callback_data="adm:panel"),
+    ]])
+    await callback.answer()
+    await callback.bot.send_message(
+        callback.from_user.id,
+        "📌 <b>Pinni olib tashlash</b>\n\n"
+        "Barcha foydalanuvchilar chatidagi <b>eng oxirgi pin qilingan xabar</b> pindan chiqariladi "
+        "(xabarning o'zi o'chmaydi).\n\nDavom etilsinmi?",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "adm:unpinok")
+async def unpin_go(callback: CallbackQuery) -> None:
+    await services.edit_or_send(callback, "⏳ Pinlar olib tashlanmoqda. Tugagach xabar beraman.")
+    await callback.answer()
+    services.spawn(_unpin_all(callback.bot, callback.from_user.id))
+
+
+async def _unpin_all(bot: Bot, admin_id: int) -> None:
+    async def unpin(uid: int) -> None:
+        try:
+            await bot.unpin_chat_message(uid)
+        except TelegramForbiddenError:
+            raise
+        except TelegramAPIError:
+            pass  # pin qilingan xabar yo'q - xato emas
+
+    done, blocked, _ = await _for_each_user(bot, unpin)
     try:
         await bot.send_message(
-            admin_id,
-            f"📢 <b>Tarqatish yakunlandi</b>\n\n✅ Yetkazildi: {sent}\n🚫 Botni bloklagan: {blocked}\n⚠️ Xato: {failed}",
+            admin_id, f"📌 <b>Pinlar olib tashlandi</b>\n\n✅ Tekshirildi: {done} ta chat\n🚫 Botni bloklagan: {blocked}",
+            reply_markup=BACK_TO_PANEL,
         )
     except TelegramAPIError:
         pass

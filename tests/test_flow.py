@@ -609,7 +609,24 @@ async def scenario():
     await cb(ADMIN, data[0])
     await asyncio.sleep(1.0)
     assert names(start).count("CopyMessage") == 5, names(start)  # 6 kishi - 1 bloklangan
-    assert "Yetkazildi: 5" in texts(start)
+    assert "Yetkazildi: 5" in texts(start) and "PinChatMessage" not in names(start)
+    # pin bilan tarqatish va pinni olib tashlash
+    await cb(ADMIN, "adm:bc")
+    await msg(ADMIN, "Muhim e'lon")
+    data = [d for d in last_markup_data() if d.startswith("adm:bcpin:")]
+    start = len(session.calls)
+    await cb(S1, data[0])  # oddiy foydalanuvchi tarqata olmaydi
+    assert "CopyMessage" not in names(start)
+    await cb(ADMIN, data[0])
+    await asyncio.sleep(1.0)
+    assert names(start).count("CopyMessage") == 5 and names(start).count("PinChatMessage") == 5, names(start)
+    assert "Pin qilindi: 5" in texts(start) and "adm:unpin" in last_markup_data()
+    out = await cb(ADMIN, "adm:unpin")
+    assert "Davom etilsinmi" in out
+    start = len(session.calls)
+    await cb(ADMIN, "adm:unpinok")
+    await asyncio.sleep(1.0)
+    assert names(start).count("UnpinChatMessage") == 5 and "Tekshirildi: 5" in texts(start), names(start)
 
     # --- kanal o'chirilgach obuna talab qilinmaydi
     session.subscribed.discard(S3)
