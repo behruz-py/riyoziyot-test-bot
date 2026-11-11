@@ -1,0 +1,37 @@
+import os
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
+
+ADMIN_IDS: set[int] = {
+    int(x) for x in os.getenv("ADMIN_IDS", "").replace(";", ",").split(",") if x.strip().lstrip("-").isdigit()
+}
+
+_db_path = Path(os.getenv("DB_PATH", "data/bot.db"))
+DB_PATH: Path = _db_path if _db_path.is_absolute() else BASE_DIR / _db_path
+
+# PostgreSQL manzili (Neon). Bo'sh bo'lsa mahalliy SQLite fayli (DB_PATH) ishlatiladi
+DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
+
+# Webhook rejimi (server). Render RENDER_EXTERNAL_URL va PORT ni o'zi beradi.
+# Bo'sh bo'lsa bot polling rejimida ishlaydi (mahalliy kompyuter uchun).
+WEBHOOK_URL: str = (os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+PORT: int = int(os.getenv("PORT", "8080"))
+
+TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Tashkent"))
+
+# Cheklovlar
+MAX_QUESTIONS = 200
+MAX_OPEN_ANSWER_LEN = 60
+MAX_TITLE_LEN = 100
+SUB_CACHE_TTL = 120  # obuna tekshiruvi natijasi necha soniya keshlanadi
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS

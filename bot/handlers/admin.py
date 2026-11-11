@@ -1,0 +1,273 @@
+"""Admin panel: statistika, xabar tarqatish, majburiy kanallar, bloklash."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from html import escape
+
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from .. import db, services, subscription
+from ..config import ADMIN_IDS, is_admin
+from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, main_menu
+
+log = logging.getLogger(__name__)
+
+router = Router(name="admin")
+router.message.filter(F.chat.type == "private", F.from_user.id.in_(ADMIN_IDS))
+router.callback_query.filter(F.data.startswith("adm:"), F.from_user.id.in_(ADMIN_IDS))
+
+
+class Admin(StatesGroup):
+    broadcast = State()
+    channel = State()
+    block = State()
+
+
+PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📊 Statistika", callback_data="adm:stats")],
+    [InlineKeyboardButton(text="📢 Xabar tarqatish", callback_data="adm:bc")],
+    [InlineKeyboardButton(text="📡 Majburiy kanallar", callback_data="adm:ch")],
+    [InlineKeyboardButton(text="🚫 Bloklash / blokdan chiqarish", callback_data="adm:block")],
+])
+
+
+@router.message(Command("admin"))
+@router.message(F.text == BTN_ADMIN)
+async def panel(message: Message) -> None:
+    await message.answer("🛠 <b>Admin panel</b>", reply_markup=PANEL_KB)
+
+
+@router.callback_query(F.data == "adm:panel")
+async def panel_cb(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await services.edit_or_send(callback, "🛠 <b>Admin panel</b>", PANEL_KB)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm:stats")
+async def stats(callback: CallbackQuery) -> None:
+    s = await db.stats()
+    back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:panel")]])
+    await services.edit_or_send(
+        callback,
+        "📊 <b>Statistika</b>\n\n"
+        f"👥 Foydalanuvchilar: <b>{s['users']}</b> (bugun: +{s['users_today']})\n"
+        f"   faol: {s['active_users']} · bloklangan: {s['blocked']}\n\n"
+        f"📋 Testlar: <b>{s['tests']}</b> (bugun: +{s['tests_today']})\n"
+        f"   faol: {s['active_tests']}\n\n"
+        f"✅ Yuborilgan javoblar: <b>{s['subs']}</b> (bugun: +{s['subs_today']})\n\n"
+        "<i>«Bugun» — UTC bo'yicha sutka.</i>",
+        back,
+    )
+    await callback.answer()
+
+
+# ---------------------------------------------------------------- xabar tarqatish
+@router.callback_query(F.data == "adm:bc")
+async def bc_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(Admin.broadcast)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        "📢 Barcha foydalanuvchilarga yuboriladigan xabarni yuboring "
+        "(matn, rasm, video — istalgan turdagi bitta xabar).",
+        reply_markup=cancel_kb(),
+    )
+
+
+@router.message(Admin.broadcast)
+async def bc_message(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    count = len(await db.all_user_ids())
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"✅ Yuborish ({count} kishi)", callback_data=f"adm:bcgo:{message.message_id}"),
+        InlineKeyboardButton(text="❌ Bekor qilish", callback_data="adm:bcno"),
+    ]])
+    await message.reply("Yuqoridagi xabar barcha foydalanuvchilarga yuborilsinmi?", reply_markup=kb)
+    await message.answer("👆 Tasdiqlang yoki bekor qiling.", reply_markup=main_menu(message.from_user.id))
+
+
+@router.callback_query(F.data == "adm:bcno")
+async def bc_cancel(callback: CallbackQuery) -> None:
+    await services.edit_or_send(callback, "❌ Xabar tarqatish bekor qilindi.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:bcgo:"))
+async def bc_go(callback: CallbackQuery) -> None:
+    message_id = int(callback.data.split(":")[2])
+    await services.edit_or_send(callback, "⏳ Xabar tarqatish boshlandi. Tugagach hisobot yuboraman.")
+    await callback.answer()
+    services.spawn(_broadcast(callback.bot, callback.from_user.id, message_id))
+
+
+async def _broadcast(bot: Bot, admin_id: int, message_id: int) -> None:
+    sent = blocked = failed = 0
+    for uid in await db.all_user_ids():
+        for attempt in range(2):
+            try:
+                await bot.copy_message(uid, admin_id, message_id)
+                sent += 1
+                break
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after + 1)
+                if attempt == 1:
+                    failed += 1
+            except TelegramForbiddenError:
+                blocked += 1
+                await db.set_inactive(uid)
+                break
+            except TelegramAPIError as e:
+                failed += 1
+                log.warning("Tarqatishda xato (%s): %s", uid, e)
+                break
+        await asyncio.sleep(0.05)
+    try:
+        await bot.send_message(
+            admin_id,
+            f"📢 <b>Tarqatish yakunlandi</b>\n\n✅ Yetkazildi: {sent}\n🚫 Botni bloklagan: {blocked}\n⚠️ Xato: {failed}",
+        )
+    except TelegramAPIError:
+        pass
+
+
+# ---------------------------------------------------------------- majburiy kanallar
+async def _channels_view():
+    channels = await db.get_channels()
+    kb = InlineKeyboardBuilder()
+    lines = ["📡 <b>Majburiy obuna kanallari</b>", ""]
+    if not channels:
+        lines.append("Hozircha kanal qo'shilmagan — botdan obunasiz foydalanish mumkin.")
+    for i, ch in enumerate(channels, start=1):
+        lines.append(f"{i}. <a href=\"{escape(ch['url'])}\">{escape(ch['title'])}</a> (<code>{ch['chat_id']}</code>)")
+        kb.row(InlineKeyboardButton(text=f"🗑 {ch['title'][:40]}", callback_data=f"adm:chdel:{ch['id']}"))
+    kb.row(InlineKeyboardButton(text="➕ Kanal qo'shish", callback_data="adm:chadd"))
+    kb.row(InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm:panel"))
+    return "\n".join(lines), kb.as_markup()
+
+
+@router.callback_query(F.data == "adm:ch")
+async def channels(callback: CallbackQuery) -> None:
+    text, kb = await _channels_view()
+    await services.edit_or_send(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:chdel:"))
+async def channel_delete(callback: CallbackQuery) -> None:
+    await db.delete_channel(int(callback.data.split(":")[2]))
+    subscription.invalidate()
+    text, kb = await _channels_view()
+    await services.edit_or_send(callback, text, kb)
+    await callback.answer("Kanal ro'yxatdan o'chirildi.")
+
+
+@router.callback_query(F.data == "adm:chadd")
+async def channel_add(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(Admin.channel)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        "➕ <b>Kanal qo'shish</b>\n\n"
+        "1️⃣ Avval botni kanalga <b>administrator</b> qilib qo'shing.\n"
+        "2️⃣ So'ng quyidagilardan birini yuboring:\n"
+        "• kanal username'i: <code>@kanal_nomi</code>\n"
+        "• kanaldan istalgan postni <b>forward</b> qiling (yopiq kanal uchun qulay)\n"
+        "• kanal ID raqami: <code>-1001234567890</code>",
+        reply_markup=cancel_kb(),
+    )
+
+
+def _channel_ref(message: Message) -> int | str | None:
+    origin = getattr(message, "forward_origin", None)
+    chat = getattr(origin, "chat", None)
+    if chat is not None:
+        return chat.id
+    text = (message.text or "").strip()
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    m = re.fullmatch(r"(?:https?://)?t\.me/([A-Za-z]\w{3,})/?", text) or re.fullmatch(r"@?([A-Za-z]\w{3,})", text)
+    return f"@{m.group(1)}" if m else None
+
+
+@router.message(Admin.channel)
+async def channel_add_got(message: Message, state: FSMContext) -> None:
+    ref = _channel_ref(message)
+    if ref is None:
+        await message.answer("⚠️ Tushunmadim. @username, kanal ID yoki kanaldan forward qilingan post yuboring:")
+        return
+    bot = message.bot
+    try:
+        chat = await bot.get_chat(ref)
+        me = await bot.get_chat_member(chat.id, bot.id)
+    except TelegramAPIError:
+        await message.answer(
+            "⚠️ Kanal topilmadi yoki bot unga qo'shilmagan. Botni kanalga administrator qilib, qaytadan yuboring:"
+        )
+        return
+    if chat.type not in ("channel", "supergroup"):
+        await message.answer("⚠️ Bu kanal yoki guruh emas. Qaytadan yuboring:")
+        return
+    if me.status != "administrator":
+        await message.answer("⚠️ Bot bu kanalda administrator emas. Admin qilib, qaytadan yuboring:")
+        return
+    if chat.username:
+        url = f"https://t.me/{chat.username}"
+    else:
+        url = chat.invite_link
+        if not url:
+            try:
+                url = await bot.export_chat_invite_link(chat.id)
+            except TelegramAPIError:
+                await message.answer(
+                    "⚠️ Yopiq kanal uchun botga «Foydalanuvchilarni havola orqali taklif qilish» huquqini bering "
+                    "va qaytadan yuboring:"
+                )
+                return
+    await db.add_channel(chat.id, chat.title or str(chat.id), url)
+    subscription.invalidate()
+    await state.clear()
+    await message.answer(f"✅ <b>{escape(chat.title or '')}</b> qo'shildi.", reply_markup=main_menu(message.from_user.id))
+    text, kb = await _channels_view()
+    await message.answer(text, reply_markup=kb, link_preview_options=NO_PREVIEW)
+
+
+# ---------------------------------------------------------------- bloklash
+@router.callback_query(F.data == "adm:block")
+async def block_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(Admin.block)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        "🚫 Foydalanuvchining <b>ID raqamini</b> yuboring (ID «👤 Profil» bo'limida ko'rinadi).\n"
+        "Bloklangan bo'lsa — blokdan chiqariladi, aks holda bloklanadi.",
+        reply_markup=cancel_kb(),
+    )
+
+
+@router.message(Admin.block, F.text)
+async def block_toggle(message: Message, state: FSMContext) -> None:
+    text = message.text.strip()
+    target = await db.get_user(int(text)) if text.isdigit() else None
+    if target is None:
+        await message.answer("⚠️ Bunday ID li foydalanuvchi topilmadi. Qaytadan yuboring:")
+        return
+    if is_admin(target["id"]):
+        await message.answer("⚠️ Adminni bloklab bo'lmaydi.")
+        return
+    blocked = not target["is_blocked"]
+    await db.set_blocked(target["id"], blocked)
+    await state.clear()
+    name = escape(target["full_name"] or target["tg_name"] or str(target["id"]))
+    await message.answer(
+        f"{'🚫 Bloklandi' if blocked else '✅ Blokdan chiqarildi'}: <b>{name}</b> (<code>{target['id']}</code>)",
+        reply_markup=main_menu(message.from_user.id),
+    )

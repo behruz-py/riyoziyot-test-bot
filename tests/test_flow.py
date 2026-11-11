@@ -1,0 +1,384 @@
+"""To'liq ssenariy sinovi (internet va haqiqiy token kerak emas).
+
+Ishga tushirish: .venv\\Scripts\\python -m tests.test_flow
+"""
+import asyncio
+import itertools
+import os
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+os.environ["BOT_TOKEN"] = "123456:TEST"
+os.environ["ADMIN_IDS"] = "1"
+
+from aiogram import Bot  # noqa: E402
+from aiogram.client.default import DefaultBotProperties  # noqa: E402
+from aiogram.client.session.base import BaseSession  # noqa: E402
+from aiogram.types import (  # noqa: E402
+    CallbackQuery, Chat, ChatMemberAdministrator, ChatMemberLeft, ChatMemberMember, Message, Update, User,
+)
+
+from bot import config, db, keyboards as kb, services, subscription  # noqa: E402
+from bot.__main__ import build_dispatcher  # noqa: E402
+
+config.ADMIN_IDS.clear()
+config.ADMIN_IDS.add(1)
+
+ADMIN, TEACHER, S1, S2, S3 = 1, 10, 21, 22, 23
+CHANNEL_ID = -1001
+ids = itertools.count(1)
+
+
+class FakeSession(BaseSession):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+        self.subscribed: set[int] = set()
+
+    async def close(self):
+        pass
+
+    async def stream_content(self, *a, **k):
+        yield b""
+
+    async def make_request(self, bot, method, timeout=None):
+        self.calls.append(method)
+        name = type(method).__name__
+        if name == "GetMe":
+            return User(id=999, is_bot=True, first_name="Bot", username="test_bot")
+        if name == "GetChatMember":
+            user = User(id=method.user_id, is_bot=False, first_name="U")
+            if method.user_id == bot.id:
+                # model_construct: Bot API versiyasiga bog'liq majburiy maydonlarni to'ldirmaslik uchun
+                return ChatMemberAdministrator.model_construct(status="administrator", user=user)
+            return ChatMemberMember(user=user) if method.user_id in self.subscribed else ChatMemberLeft(user=user)
+        if name == "GetChat":
+            from aiogram.types import ChatFullInfo
+            return ChatFullInfo.model_construct(
+                id=CHANNEL_ID, type="channel", title="Riyoziyot kanali", username="riyoziyot", invite_link=None
+            )
+        if name in ("SendMessage", "SendPhoto", "SendDocument", "EditMessageText"):
+            return Message(message_id=next(ids), date=datetime.now(), chat=Chat(id=getattr(method, "chat_id", 0) or 0, type="private"))
+        if name == "CopyMessage":
+            from aiogram.types import MessageId
+            return MessageId(message_id=next(ids))
+        return True
+
+
+session = FakeSession()
+bot = Bot("123456:TEST", session=session, default=DefaultBotProperties(parse_mode="HTML"))
+dp = build_dispatcher()
+
+
+def texts(since: int) -> str:
+    out = []
+    for m in session.calls[since:]:
+        for attr in ("text", "caption"):
+            v = getattr(m, attr, None)
+            if isinstance(v, str):
+                out.append(v)
+    return "\n----\n".join(out)
+
+
+def names(since: int) -> list[str]:
+    return [type(m).__name__ for m in session.calls[since:]]
+
+
+async def msg(uid: int, text: str) -> str:
+    start = len(session.calls)
+    m = Message(message_id=next(ids), date=datetime.now(), chat=Chat(id=uid, type="private"),
+                from_user=User(id=uid, is_bot=False, first_name=f"User{uid}"), text=text)
+    await dp.feed_update(bot, Update(update_id=next(ids), message=m))
+    return texts(start)
+
+
+async def cb(uid: int, data: str) -> str:
+    start = len(session.calls)
+    m = Message(message_id=next(ids), date=datetime.now(), chat=Chat(id=uid, type="private"),
+                from_user=User(id=999, is_bot=True, first_name="Bot"), text="x")
+    c = CallbackQuery(id=str(next(ids)), from_user=User(id=uid, is_bot=False, first_name=f"User{uid}"),
+                      chat_instance="ci", data=data, message=m)
+    await dp.feed_update(bot, Update(update_id=next(ids), callback_query=c))
+    return texts(start)
+
+
+def last_markup_data() -> list[str]:
+    """Oxirgi yuborilgan inline klaviaturadagi callback_data lar."""
+    for m in reversed(session.calls):
+        rm = getattr(m, "reply_markup", None)
+        if rm is not None and hasattr(rm, "inline_keyboard"):
+            return [b.callback_data for row in rm.inline_keyboard for b in row if b.callback_data]
+    return []
+
+
+async def register(uid: int, name: str):
+    session.subscribed.add(uid)
+    out = await msg(uid, "/start")
+    assert "ism va familiyangizni" in out, out
+    out = await msg(uid, name)
+    assert "Asosiy menyu" in out, out
+
+
+async def main():
+    # TEST_DATABASE_URL berilsa - PostgreSQL'da (bo'sh baza bo'lishi kerak), aks holda vaqtinchalik SQLite
+    target = os.getenv("TEST_DATABASE_URL") or Path(tempfile.mkdtemp()) / "test.db"
+    await db.init(target)
+    try:
+        await scenario()
+        await webhook_check()
+    finally:
+        await db.close()  # aks holda xato chiqqanda aiosqlite oqimi jarayonni ushlab qoladi
+    print("flow: OK")
+
+
+async def webhook_check():
+    """Server rejimi: /health javob beradi, webhook faqat to'g'ri maxfiy kalit bilan qabul qiladi."""
+    import aiohttp
+    from aiohttp import web
+
+    from bot.__main__ import build_web_app
+
+    runner = web.AppRunner(build_web_app(bot, dp, "sekret"))
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+    update = {"update_id": 10**6, "message": {
+        "message_id": 10**6, "date": 0, "chat": {"id": S1, "type": "private"},
+        "from": {"id": S1, "is_bot": False, "first_name": "U"}, "text": kb.BTN_HELP}}
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.get(f"http://127.0.0.1:{port}/health") as r:
+                assert r.status == 200 and await r.text() == "ok"
+            async with http.head(f"http://127.0.0.1:{port}/") as r:
+                assert r.status == 200
+            start = len(session.calls)
+            async with http.post(f"http://127.0.0.1:{port}/webhook/sekret", json=update,
+                                 headers={"X-Telegram-Bot-Api-Secret-Token": "noto'g'ri".encode().hex()}) as r:
+                assert r.status == 401, r.status
+            assert len(session.calls) == start, "maxfiy kalitsiz so'rov qabul qilindi"
+            async with http.post(f"http://127.0.0.1:{port}/webhook/sekret", json=update,
+                                 headers={"X-Telegram-Bot-Api-Secret-Token": "sekret"}) as r:
+                assert r.status == 200, r.status
+            await asyncio.sleep(0.5)
+            assert "Botdan foydalanish" in texts(start), texts(start)
+    finally:
+        await runner.cleanup()
+
+
+async def scenario():
+
+    # --- admin: kanal qo'shish
+    out = await msg(ADMIN, "/start")
+    assert "ism va familiyangizni" in out
+    await msg(ADMIN, "Admin Adminov")
+    out = await msg(ADMIN, kb.BTN_ADMIN)
+    assert "Admin panel" in out
+    await cb(ADMIN, "adm:ch")
+    await cb(ADMIN, "adm:chadd")
+    out = await msg(ADMIN, "@riyoziyot")
+    assert "qo'shildi" in out, out
+    assert len(await db.get_channels()) == 1
+
+    # --- obuna talabi
+    out = await msg(S1, "/start test_00000")
+    assert "obuna bo'ling" in out, out
+    out = await msg(S1, kb.BTN_CREATE)
+    assert "obuna bo'ling" in out
+    start = len(session.calls)
+    await cb(S1, "check_sub")
+    assert any(getattr(m, "show_alert", False) for m in session.calls[start:]), "obunasiz o'tib ketdi"
+    session.subscribed.add(S1)
+    out = await cb(S1, "check_sub")
+    assert "ism va familiyangizni" in out, out
+    out = await msg(S1, kb.BTN_CREATE)  # ro'yxatdan o'tmasdan menyu ishlamasligi kerak
+    assert "ism va familiyangizni" in out, out
+    out = await msg(S1, "Aliyev Vali")
+    assert "Asosiy menyu" in out and "topilmadi" in out, out  # deep-link saqlanib qolgan, test yo'q
+
+    await register(TEACHER, "Ustoz Karimov")
+    await register(S2, "Bobur <b>Mirzo</b>")
+    await register(S3, "Salimova Dilnoza")
+
+    # --- test yaratish (aralash, alohida ballar, muddatsiz)
+    out = await msg(TEACHER, kb.BTN_CREATE)
+    assert "Test nomini" in out
+    await msg(TEACHER, "Algebra <9-sinf> & nazorat")
+    out = await msg(TEACHER, "1a2b4c")
+    assert "ketma-ket emas" in out
+    out = await msg(TEACHER, "1. a\n2. b\n3. 0.5|1/2\n4. d\n5. Toshkent")
+    assert "5</b> ta savol" in out and "variantli: 3, ochiq: 2" in out, out
+    out = await cb(TEACHER, "cr:p:custom")
+    assert "savollar: ball" in out
+    out = await msg(TEACHER, "1-9: 2")
+    assert "noto'g'ri" in out
+    out = await msg(TEACHER, "1-2: 1.1; 3: 3.1")
+    assert "Maksimal ball: <b>7.3</b>" in out, out
+    out = await msg(TEACHER, "01.01.2020 10:00")
+    assert "kelajakdagi" in out
+    out = await cb(TEACHER, "cr:d:0")
+    assert "Tekshirib oling" in out and "belgilanmagan" in out and "&lt;9-sinf&gt; &amp;" in out, out
+    out = await cb(TEACHER, "cr:ok")
+    assert "Test yaratildi" in out and "start=test_" in out, out
+    tests = await db.tests_by_owner(TEACHER, 10, 0)
+    assert len(tests) == 1
+    test = tests[0]
+    code, tid = test["code"], test["id"]
+
+    # --- muallif o'z testiga javob yubora olmaydi
+    out = await msg(TEACHER, f"{code}*abcda")
+    assert "O'zingiz yaratgan" in out, out
+
+    # --- S1: menyu orqali, xatolar bilan
+    await msg(S1, kb.BTN_CHECK)
+    out = await msg(S1, "99")
+    assert "topilmadi" in out
+    out = await msg(S1, code)
+    assert "ochiq (yozma) javobli" in out and "3, 5" in out, out
+    out = await msg(S1, "abcd")
+    assert "5</b> ta savol bor" in out, out
+    out = await msg(S1, "1. a\n2. zzz\n3. 1\n4. d\n5. x")
+    assert "variantli" in out, out
+    out = await msg(S1, "1. a\n2. c\n3. 2/4\n4. -\n5. toshkent")
+    assert "qabul qilindi" in out and "3 / 5" in out and "5.2 / 7.3" in out, out
+    assert "1 / 1" in out and "Xato javoblar (1 ta)" in out and "Javobsiz (1 ta):</b> 4" in out, out
+    assert "to'g'ri: <code>" not in out, "kalit test tugamasdan oshkor bo'ldi"
+    # qayta yuborish
+    out = await msg(S1, f"{code}*1. a\n2. b\n3. 0.5\n4. d\n5. toshkent")
+    assert "avval javob yuborgansiz" in out, out
+
+    # --- S2: tezkor format, hammasi to'g'ri; deep link orqali S3
+    out = await msg(S2, f"{code}*a;b;0,5;d;TOSHKENT")
+    assert "Barcha javoblaringiz to'g'ri" in out and "7.3 / 7.3" in out and "1 / 2" in out, out
+    out = await msg(S3, f"/start test_{code}")
+    assert "Savollar soni" in out, out
+    out = await msg(S3, "1. b\n2. b\n3. 7\n4. d\n5. -")
+    assert "2 / 5" in out and "3 / 3" in out, out  # 1.1 + 1 = 2.1 ball, 3-o'rin
+
+    # --- reyting
+    out = await cb(S1, f"rating:{tid}")
+    assert out.index("Bobur") < out.index("Aliyev") < out.index("Salimova"), out
+    assert "&lt;b&gt;Mirzo&lt;/b&gt;" in out, "HTML ekranlanmagan"
+    start = len(session.calls)
+    await cb(ADMIN, f"rating:{tid}")
+    await msg(ADMIN, kb.BTN_RATING)
+    out = await msg(ADMIN, code)
+    assert "Bobur" in out
+    await register(77, "Begona Odam")
+    start = len(session.calls)
+    await cb(77, f"rating:{tid}")
+    assert "SendMessage" not in names(start), "begona reytingni ko'rdi"
+    start = len(session.calls)
+    await cb(77, f"t:res:{tid}")
+    assert "SendMessage" not in names(start), "begona muallif paneliga kirdi"
+    await cb(77, f"t:delok:{tid}")
+    assert await db.get_test(tid) is not None, "begona testni o'chirdi"
+
+    # --- natijalarim, sertifikat
+    out = await msg(S1, kb.BTN_MY_RESULTS)
+    assert f"res:{tid}" in last_markup_data()
+    out = await cb(S1, f"res:{tid}")
+    assert "3 / 5" in out
+    start = len(session.calls)
+    await cb(S1, f"cert:{tid}")
+    assert "SendPhoto" in names(start), names(start)
+
+    # --- muallif: ro'yxat, ko'rish, natijalar, excel, kalit
+    out = await msg(TEACHER, kb.BTN_MY_TESTS)
+    assert f"t:v:{tid}" in last_markup_data()
+    out = await cb(TEACHER, f"t:v:{tid}")
+    assert "Ishtirokchilar: <b>3</b>" in out and "Faol" in out, out
+    out = await cb(TEACHER, f"t:res:{tid}")
+    assert "O'rtacha ball" in out, out
+    start = len(session.calls)
+    await cb(TEACHER, f"t:xl:{tid}")
+    assert "SendDocument" in names(start)
+    out = await cb(TEACHER, f"t:key:{tid}")
+    assert "Toshkent" in out and "Ballar" in out, out
+    out = await cb(TEACHER, f"t:share:{tid}")
+    assert code in out
+
+    # --- yakunlash
+    await cb(TEACHER, f"t:fin:{tid}")
+    start = len(session.calls)
+    out = await cb(TEACHER, f"t:finok:{tid}")
+    await asyncio.sleep(0.5)  # ishtirokchilarga fon xabarlari
+    out = texts(start)
+    assert "Test yakunlandi" in out and "Yakuniy o'rningiz: <b>1 / 3</b>" in out, out
+    assert "SendDocument" in names(start)
+    out = await cb(S1, f"res:{tid}")
+    assert "to'g'ri: <code>B</code>" in out and "to'g'ri: <code>D</code>" in out and "yakuniy" in out, out
+    out = await msg(77, f"{code}*abcda")
+    assert "yakunlangan" in out, out
+
+    # --- muddatli test + avtomatik yakunlash
+    await msg(TEACHER, kb.BTN_CREATE)
+    await msg(TEACHER, "Tezkor test")
+    out = await msg(TEACHER, "abcd")
+    assert "variantli: 4, ochiq: 0" in out
+    await cb(TEACHER, "cr:p:std")
+    out = await cb(TEACHER, "cr:d:60")
+    assert "gacha" in out
+    await cb(TEACHER, "cr:ok")
+    t2 = (await db.tests_by_owner(TEACHER, 10, 0))[0]
+    out = await msg(S1, f"{t2['code']}*abca")
+    assert "3 / 4" in out, out
+    await db._exec("UPDATE tests SET deadline='2000-01-01 00:00:00' WHERE id=?", (t2["id"],))
+    out = await msg(S2, f"{t2['code']}*abcd")
+    assert "yakunlangan" in out, out
+    start = len(session.calls)
+    watcher = asyncio.create_task(services.deadline_watcher(bot))
+    await asyncio.sleep(0.6)
+    watcher.cancel()
+    out = texts(start)
+    assert "avtomatik yakunlandi" in out and "Yakuniy o'rningiz" in out, out
+    assert not (await db.get_test(t2["id"]))["is_active"]
+
+    # --- menyu tugmasi holatni bekor qiladi
+    await msg(S1, kb.BTN_CHECK)
+    out = await msg(S1, kb.BTN_PROFILE)
+    assert "Profil" in out and "Ishlagan testlaringiz: <b>2</b>" in out, out
+    out = await msg(S1, "tushunarsiz narsa")
+    assert "Tushunmadim" in out
+
+    # --- o'chirish
+    await cb(TEACHER, f"t:del:{tid}")
+    await cb(TEACHER, f"t:delok:{tid}")
+    assert await db.get_test(tid) is None and await db.get_submission(tid, S1) is None
+
+    # --- admin: statistika, bloklash, tarqatish, begona admin panelga kira olmaydi
+    out = await cb(ADMIN, "adm:stats")
+    assert "Foydalanuvchilar: <b>6</b>" in out, out
+    start = len(session.calls)
+    await cb(S1, "adm:stats")
+    out = await msg(S1, "/admin")
+    assert "Statistika" not in texts(start) and "Admin panel" not in out
+    await cb(ADMIN, "adm:block")
+    out = await msg(ADMIN, "77")
+    assert "Bloklandi" in out
+    start = len(session.calls)
+    await msg(77, kb.BTN_HELP)
+    assert len(session.calls) == start, "bloklangan foydalanuvchiga javob berildi"
+    await cb(ADMIN, "adm:bc")
+    await msg(ADMIN, "Hammaga salom")
+    data = [d for d in last_markup_data() if d.startswith("adm:bcgo:")]
+    start = len(session.calls)
+    await cb(ADMIN, data[0])
+    await asyncio.sleep(1.0)
+    assert names(start).count("CopyMessage") == 5, names(start)  # 6 kishi - 1 bloklangan
+    assert "Yetkazildi: 5" in texts(start)
+
+    # --- kanal o'chirilgach obuna talab qilinmaydi
+    session.subscribed.discard(S3)
+    subscription.invalidate()
+    out = await msg(S3, kb.BTN_HELP)
+    assert "obuna bo'ling" in out
+    ch = (await db.get_channels())[0]
+    await cb(ADMIN, f"adm:chdel:{ch['id']}")
+    out = await msg(S3, kb.BTN_HELP)
+    assert "Botdan foydalanish" in out
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
