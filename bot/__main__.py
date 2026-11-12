@@ -11,17 +11,37 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, ErrorEvent
 
-from . import admins, config, daily, db, services
-from .handlers import admin, create, mytests, solve, start
+from . import admins, alerts, config, daily, db, services
+from .handlers import admin, create, keyedit, mytests, solve, start
+from .antiflood import ThrottleMiddleware
 from .middlewares import SubscriptionMiddleware, UserMiddleware
 from .storage import DbStorage
 
 log = logging.getLogger("bot")
 
 
+def _update_context(update) -> str:
+    """Xato haqidagi xabar uchun: kim, qaysi tugma yoki xabar."""
+    from html import escape
+
+    if update.callback_query:
+        q = update.callback_query
+        return f"<code>{q.from_user.id}</code> · tugma <code>{escape((q.data or '')[:60])}</code>"
+    if update.message:
+        m = update.message
+        uid = m.from_user.id if m.from_user else "?"
+        content = m.text or m.caption or f"[{m.content_type}]"
+        return f"<code>{uid}</code> · xabar «{escape(content[:80])}»"
+    return f"update turi: {escape(update.event_type)}"
+
+
 async def on_error(event: ErrorEvent) -> bool:
-    log.exception("Handlerda kutilmagan xatolik", exc_info=event.exception)
     update = event.update
+    try:
+        context = _update_context(update)
+    except Exception:
+        context = None
+    log.error("Handlerda kutilmagan xatolik", exc_info=event.exception, extra={"alert_context": context})
     try:
         if update.callback_query:
             await update.callback_query.answer("⚠️ Xatolik yuz berdi. Qaytadan urinib ko'ring.", show_alert=True)
@@ -37,12 +57,14 @@ async def on_error(event: ErrorEvent) -> bool:
 
 def build_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=DbStorage())
+    throttle = ThrottleMiddleware()  # birinchi: spam bazaga yetib bormasin
     for observer in (dp.message, dp.callback_query):
+        observer.outer_middleware(throttle)
         observer.outer_middleware(UserMiddleware())
         observer.outer_middleware(SubscriptionMiddleware())
     dp.errors.register(on_error)
     # Tartib muhim: start (ro'yxatdan o'tish) birinchi, mytests (fallback) oxirgi
-    dp.include_routers(start.router, admin.router, create.router, solve.router, mytests.router)
+    dp.include_routers(start.router, admin.router, create.router, solve.router, keyedit.router, mytests.router)
     return dp
 
 
@@ -65,6 +87,7 @@ async def main() -> None:
     ])
     me = await bot.me()
     log.info("Bot ishga tushdi: @%s", me.username)
+    alerts.setup(bot)
 
     watcher = asyncio.create_task(services.deadline_watcher(bot))
     daily_task = asyncio.create_task(daily.daily_loop(bot))
@@ -78,6 +101,7 @@ async def main() -> None:
     finally:
         watcher.cancel()
         daily_task.cancel()
+        alerts.shutdown()
         await db.close()
         await bot.session.close()
 

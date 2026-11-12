@@ -93,6 +93,25 @@ def main():
     assert kp.validate_answers(qs, ["a", "xyz", "1", "d"]) is not None  # variantli savolga matn
     assert "A, B, C yoki D" in kp.validate_answers(qs, ["a", "xyz", "1", "d"])
 
+    # Ayrim savollarni tuzatish
+    assert kp.parse_corrections("5 B", 10) == {5: "b"}
+    assert kp.parse_corrections("5. b\n12 D\n7 = 12.5", 20) == {5: "b", 12: "d", 7: "12.5"}
+    assert kp.parse_corrections("5B; 6) c; 7: -3", 10) == {5: "b", 6: "c", 7: "-3"}
+    assert kp.parse_corrections("3 0.5|1/2", 5) == {3: "0.5|1/2"}
+    assert kp.parse_corrections("2 В", 5) == {2: "b"}  # kirill В
+    for bad, error in (("11 B", "11-savol yo'q"), ("0 A", "0-savol yo'q"), ("2 E", "faqat"), ("2 -", "ko'rsatilmagan"),
+                       ("2 A\n2 B", "ikki marta"), ("B", "tushunmadim"), ("", "bo'sh")):
+        try:
+            kp.parse_corrections(bad, 10)
+            raise AssertionError(f"qabul qilindi: {bad!r}")
+        except kp.ParseError as e:
+            assert error in str(e), (bad, str(e))
+    qs = kp.build_questions(["a", "12", "c"])
+    qs[1]["p"] = 2.5
+    new = kp.apply_answers(qs, {1: "d", 2: "b", 3: "x=2"})
+    assert [(q["t"], q["a"], q["p"]) for q in new] == [("c", "d", 1.0), ("c", "b", 2.5), ("o", "x=2", 1.0)]
+    assert qs[0]["a"] == "a", "asl ro'yxat o'zgarib qoldi"
+
     assert kp.fmt_num(4.5) == "4.5" and kp.fmt_num(3.0) == "3" and kp.fmt_num(0) == "0"
     assert kp.fmt_num(33.300000001) == "33.3"
     print("keyparser: OK")

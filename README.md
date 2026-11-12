@@ -14,8 +14,11 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 - **Reyting**: ball bo'yicha, teng bo'lsa — oldin topshirgan yuqorida. Faqat ishtirokchi, muallif va adminlar ko'radi.
 - **Sertifikat** (PNG): ism, ball, foiz, yakunlangan testda — egallagan o'rin.
 - **Muallif paneli**: natijalar, Excel hisobot (reyting + har bir savol tahlili), kalit, ulashish, yakunlash, o'chirish.
+- **Kalitni tahrirlash**: ayrim savollarni tuzatish (`5 B`), butun kalitni qayta kiritish yoki ballarni o'zgartirish. Saqlashdan oldin o'zgarishlar va nechta ishtirokchining bali o'zgarishi ko'rsatiladi; barcha natijalar, reyting va sertifikatlar avtomatik qayta hisoblanadi, ishtirokchilarga xabar yuborish ixtiyoriy.
 - **Majburiy obuna**: bir yoki bir nechta kanal, admin paneldan boshqariladi.
 - **Admin panel**: kengaytirilgan statistika (umumiy, 7 kunlik dinamika, eng faollar, foydalanuvchilar ro'yxati Excel'da), barchaga xabar tarqatish, kanallar, foydalanuvchini bloklash.
+- **Xatolar haqida xabar**: botda kutilmagan xato chiqsa, bosh adminga qayerda, kimda va nima sababdan ekani yuboriladi. Bir xil xato 15 daqiqada bir martadan ko'p yuborilmaydi. Sinash: `/alerttest`. O'chirish: `ERROR_ALERTS=0`.
+- **Spamdan himoya**: 6 soniyada 12 tadan ko'p xabar/tugma bosgan foydalanuvchi vaqtincha to'xtatiladi (10 soniya → 1 daqiqa → 5 daqiqa). Adminlar cheklanmaydi. Sozlash: `FLOOD_LIMIT`, `FLOOD_PERIOD`.
 - **Kunlik hisobot va zaxira nusxa**: har kuni `DAILY_HOUR` (standart 21:00) dan keyin adminlarga kun xulosasi va bazaning zaxira fayli yuboriladi. Qo'lda: admin panel -> «💾 Zaxira nusxa».
 - **Nomaqbul ismlardan himoya** (uch qatlam):
   1. Avtomatik filtr: ism-familiya va test nomlarida so'kinish so'zlari (o'zbek, rus, ingliz; kirill/lotin, bo'shliq yoki belgi bilan yozilgani ham). Admin qo'shimcha so'z kirita oladi.
@@ -54,6 +57,8 @@ copy .env.example .env      # so'ng .env ichiga BOT_TOKEN va ADMIN_IDS ni yozing
 | `bot/middlewares.py`, `bot/subscription.py` | Ro'yxatga olish, bloklash, majburiy obuna |
 | `bot/services.py` | Matnlar, testni yakunlash, muddat nazorati |
 | `bot/moderation.py` | Nomaqbul so'zlar filtri |
+| `bot/alerts.py`, `bot/antiflood.py` | Xatolar haqida xabar, spamdan himoya |
+| `bot/handlers/keyedit.py` | Kalitni tahrirlash va qayta hisoblash |
 | `bot/storage.py` | Yarim qolgan amallarni bazada saqlash |
 | `bot/excel.py`, `bot/certificate.py` | Excel hisobot va sertifikat |
 | `bot/handlers/` | start, create, solve, mytests, admin |

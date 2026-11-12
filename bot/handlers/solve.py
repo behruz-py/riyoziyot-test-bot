@@ -184,14 +184,21 @@ async def submit(bot: Bot, state: FSMContext, user, test, answers: list[str]) ->
     try:
         if await _unavailable(bot, state, user, test):
             return
-        questions = services.questions_of(test)
-        if kp.validate_answers(questions, answers) is not None:
-            await _ask_answers(bot, uid, state, test)
-            return
-        res = kp.grade(questions, answers)
-        await db.add_submission(
-            test["id"], uid, user["full_name"], answers, res["correct"], res["score"], res["max_score"]
-        )
+        async with services.test_lock(test["id"]):
+            # Kalit shu orada tahrirlangan bo'lishi mumkin - baholashdan oldin testni qayta o'qiymiz
+            test = await db.get_test(test["id"])
+            if test is None:
+                await state.clear()
+                await bot.send_message(uid, "❌ Test topilmadi — muallif uni o'chirgan.", reply_markup=main_menu(uid))
+                return
+            questions = services.questions_of(test)
+            if kp.validate_answers(questions, answers) is not None:
+                await _ask_answers(bot, uid, state, test)
+                return
+            res = kp.grade(questions, answers)
+            await db.add_submission(
+                test["id"], uid, user["full_name"], answers, res["correct"], res["score"], res["max_score"]
+            )
         await state.clear()
         sub = await db.get_submission(test["id"], uid)
         await bot.send_message(uid, "✅ <b>Javoblaringiz qabul qilindi!</b> Natijangiz 👇", reply_markup=main_menu(uid))

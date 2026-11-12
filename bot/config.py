@@ -32,6 +32,13 @@ TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Tashkent"))
 # Adminlarga kunlik hisobot va zaxira nusxa yuboriladigan soat (mahalliy vaqt, 0-23). -1 - o'chirilgan
 DAILY_HOUR: int = int(os.getenv("DAILY_HOUR", "21"))
 
+# Xatolar haqida bosh adminlarga xabar yuborish (1 - yoqilgan, 0 - o'chirilgan)
+ERROR_ALERTS: bool = os.getenv("ERROR_ALERTS", "1").strip() not in ("0", "false", "no", "")
+
+# Spamdan himoya: PERIOD soniyada LIMIT dan ko'p xabar/tugma - foydalanuvchi vaqtincha to'xtatiladi
+FLOOD_LIMIT: int = int(os.getenv("FLOOD_LIMIT", "12"))
+FLOOD_PERIOD: float = float(os.getenv("FLOOD_PERIOD", "6"))
+
 # Cheklovlar
 MAX_QUESTIONS = 200
 MAX_OPEN_ANSWER_LEN = 60

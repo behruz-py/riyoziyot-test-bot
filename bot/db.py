@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS fsm (
 _NEW_COLUMNS = [
     ("submissions", "is_hidden", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "last_seen", "TEXT"),
+    ("tests", "edited_at", "TEXT"),
 ]
 _SQLITE_TYPES = {"PK": "INTEGER PRIMARY KEY AUTOINCREMENT", "BIG": "INTEGER", "REAL": "REAL"}
 _PG_TYPES = {"PK": "BIGSERIAL PRIMARY KEY", "BIG": "BIGINT", "REAL": "DOUBLE PRECISION"}
@@ -452,6 +453,25 @@ async def add_submission(
 
 async def get_submission(test_id: int, user_id: int):
     return await _one("SELECT * FROM submissions WHERE test_id=? AND user_id=?", (test_id, user_id))
+
+
+async def submissions_all(test_id: int) -> list:
+    """Testning barcha natijalari (reytingdan chiqarilganlari ham) - qayta hisoblash uchun."""
+    return await _all("SELECT * FROM submissions WHERE test_id=? ORDER BY id", (test_id,))
+
+
+async def update_questions(test_id: int, questions: list[dict]) -> None:
+    await _exec(
+        "UPDATE tests SET questions=?, edited_at=? WHERE id=?",
+        (json.dumps(questions, ensure_ascii=False), now_utc(), test_id),
+    )
+
+
+async def update_grade(sub_id: int, correct: int, score: float, max_score: float) -> None:
+    await _exec(
+        "UPDATE submissions SET correct_count=?, score=?, max_score=? WHERE id=?",
+        (correct, score, max_score, sub_id),
+    )
 
 
 async def get_submission_by_id(sub_id: int):

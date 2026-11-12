@@ -4,6 +4,7 @@ Ishga tushirish: .venv\\Scripts\\python -m tests.test_flow
 """
 import asyncio
 import itertools
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -11,6 +12,7 @@ from pathlib import Path
 
 os.environ["BOT_TOKEN"] = "123456:TEST"
 os.environ["ADMIN_IDS"] = "1"
+os.environ["FLOOD_LIMIT"] = "100000"  # asosiy ssenariy tez yozadi; spam himoyasi alohida sinaladi
 
 from aiogram import Bot  # noqa: E402
 from aiogram.client.default import DefaultBotProperties  # noqa: E402
@@ -20,10 +22,10 @@ from aiogram.types import (  # noqa: E402
 )
 
 from bot import admins, backup, certs, config, daily, db, keyboards as kb, services  # noqa: E402
-from bot import subscription  # noqa: E402
+from bot import alerts, antiflood, subscription  # noqa: E402
 from bot.__main__ import build_dispatcher  # noqa: E402
 from bot.handlers import admin as admin_h, create as create_h, mytests as mytests_h  # noqa: E402
-from bot.handlers import solve as solve_h, start as start_h  # noqa: E402
+from bot.handlers import keyedit as keyedit_h, solve as solve_h, start as start_h  # noqa: E402
 
 config.ADMIN_IDS.clear()
 config.ADMIN_IDS.add(1)
@@ -126,7 +128,8 @@ async def photo(uid: int) -> str:
 def restart():
     """Server qayta ishga tushishini taqlid qiladi: xotiradagi holat yo'qoladi, bazadagisi qoladi."""
     global dp
-    for router in (start_h.router, admin_h.router, create_h.router, solve_h.router, mytests_h.router):
+    for router in (start_h.router, admin_h.router, create_h.router, solve_h.router, keyedit_h.router,
+                   mytests_h.router):
         router._parent_router = None
     dp = build_dispatcher()
 
@@ -148,17 +151,172 @@ async def register(uid: int, name: str):
     assert "Asosiy menyu" in out, out
 
 
+class _ErrorCapture(logging.Handler):
+    """Bot loglaridagi barcha xatolarni yig'adi: sinov oxirida faqat ataylab qilinganlari qolishi kerak."""
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+# Ataylab qilingan xatolar: noto'g'ri tugma (alerts_check) va /alerttest
+EXPECTED_ERRORS = ("invalid literal for int() with base 10: 'abc'", "Bu sinov xatosi")
+
+
 async def main():
+    capture = _ErrorCapture()
+    logging.getLogger("bot").addHandler(capture)
     # TEST_DATABASE_URL berilsa - PostgreSQL'da (bo'sh baza bo'lishi kerak), aks holda vaqtinchalik SQLite
     target = os.getenv("TEST_DATABASE_URL") or Path(tempfile.mkdtemp()) / "test.db"
     await db.init(target)
     try:
         await scenario()
         await webhook_check()
+        await alerts_check()
+        await flood_check()
         await daily_and_backup_check()
     finally:
         await db.close()  # aks holda xato chiqqanda aiosqlite oqimi jarayonni ushlab qoladi
-    print("flow: OK")
+    unexpected = [
+        r for r in capture.records
+        if not (r.exc_info and any(e in str(r.exc_info[1]) for e in EXPECTED_ERRORS))
+    ]
+    assert not unexpected, "Kutilmagan xatolar:\n" + "\n".join(
+        f"{r.name}: {r.getMessage()} {r.exc_info[1] if r.exc_info else ''}" for r in unexpected
+    )
+    assert len(capture.records) >= 4, len(capture.records)  # ataylab qilinganlar haqiqatan yozilgan
+    print(f"flow: OK (kutilmagan xato yo'q, ataylab qilingan: {len(capture.records)})")
+
+
+async def settle(timeout: float = 20) -> None:
+    """Fon vazifalari (ishtirokchilarga xabar, tarqatish) tugashini kutadi."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while services._background_tasks:
+        left = deadline - asyncio.get_running_loop().time()
+        assert left > 0, "fon vazifalari tugamadi"
+        await asyncio.wait(set(services._background_tasks), timeout=left)
+    await asyncio.sleep(0)
+
+
+async def until(condition, timeout: float = 20, step: float = 0.02) -> None:
+    """Shart bajarilguncha kutadi (condition - oddiy yoki async funksiya)."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        value = condition()
+        if asyncio.iscoroutine(value):
+            value = await value
+        if value:
+            return
+        assert asyncio.get_running_loop().time() < deadline, "shart bajarilmadi"
+        await asyncio.sleep(step)
+
+
+async def alerts_idle() -> None:
+    """Xato xabarlari navbati to'liq qayta ishlanishini kutadi."""
+    await asyncio.sleep(0.05)  # call_soon_threadsafe orqali qo'yilgan elementlar navbatga tushsin
+    await asyncio.wait_for(alerts._queue.join(), 20)
+
+
+def sent_to(start: int, chat_id: int) -> str:
+    return "\n----\n".join(
+        m.text for m in session.calls[start:]
+        if type(m).__name__ == "SendMessage" and m.chat_id == chat_id and isinstance(m.text, str)
+    )
+
+
+async def alerts_check():
+    """Xato bosh adminga yetib boradi; bir xil xato qayta-qayta yuborilmaydi; foydalanuvchi ogohlantiriladi."""
+    alerts.reset()
+    alerts.setup(bot)
+    try:
+        start = len(session.calls)
+        await cb(TEACHER, "t:v:abc")  # ataylab noto'g'ri tugma -> ValueError
+        await alerts_idle()
+        out = sent_to(start, ADMIN)
+        assert "Botda xatolik" in out and "ValueError" in out and "<code>10</code> · tugma <code>t:v:abc</code>" in out, out
+        assert "<pre>" in out and "Traceback" in out, out
+        answers = [m for m in session.calls[start:] if type(m).__name__ == "AnswerCallbackQuery"]
+        assert answers and "Xatolik yuz berdi" in answers[-1].text, "foydalanuvchiga xabar berilmadi"
+        assert not sent_to(start, TEACHER), "texnik tafsilot foydalanuvchiga ketdi"
+
+        start = len(session.calls)
+        await cb(TEACHER, "t:v:abc")  # shu xato 15 daqiqa ichida qayta yuborilmaydi
+        await cb(S1, "t:v:abc")
+        await alerts_idle()
+        assert not sent_to(start, ADMIN), sent_to(start, ADMIN)
+        for sig in list(alerts._last_sent):  # 15 daqiqa o'tdi deb hisoblaymiz
+            alerts._last_sent[sig] = -10**9
+        await cb(TEACHER, "t:v:abc")
+        await alerts_idle()
+        assert "yana 2 marta takrorlandi" in sent_to(start, ADMIN), sent_to(start, ADMIN)
+
+        start = len(session.calls)
+        out = await msg(ADMIN, "/alerttest")
+        await alerts_idle()
+        assert "Sinov xatosi yaratildi" in out and "RuntimeError" in sent_to(start, ADMIN), sent_to(start, ADMIN)
+        start = len(session.calls)
+        await msg(S1, "/alerttest")  # oddiy foydalanuvchi uchun buyruq ishlamaydi
+        await alerts_idle()
+        assert not sent_to(start, ADMIN)
+    finally:
+        alerts.shutdown()
+
+
+async def flood_check():
+    """Juda tez yozgan foydalanuvchi vaqtincha to'xtatiladi, jazo bosqichma-bosqich uzayadi."""
+    import time
+    from aiogram.types import PhotoSize
+
+    now = [time.monotonic() + 100_000]
+    old_limit, old_clock = antiflood.LIMIT, antiflood.clock
+    antiflood.LIMIT, antiflood.clock = 5, (lambda: now[0])
+    try:
+        for _ in range(5):
+            assert "Yordam</b>" in await msg(S1, kb.BTN_HELP)
+        out = await msg(S1, kb.BTN_HELP)  # 6-xabar - chegaradan oshdi
+        assert "Juda tez xabar yuboryapsiz" in out and "10 soniya" in out and "Yordam</b>" not in out, out
+        start = len(session.calls)
+        await msg(S1, kb.BTN_HELP)
+        await msg(S1, kb.BTN_PROFILE)
+        assert len(session.calls) == start, "to'xtatilgan foydalanuvchiga javob berildi yoki takroriy ogohlantirish"
+        await cb(S1, "home")
+        answers = [m for m in session.calls[start:] if type(m).__name__ == "AnswerCallbackQuery"]
+        assert len(answers) == 1 and "Juda tez bosyapsiz" in answers[0].text, names(start)
+        assert "SendMessage" not in names(start)
+
+        now[0] += 11
+        assert "Yordam</b>" in await msg(S1, kb.BTN_HELP)  # muddat tugadi (1-xabar)
+        for _ in range(4):  # 2..5-xabarlar
+            await msg(S1, kb.BTN_HELP)
+        out = await msg(S1, kb.BTN_HELP)  # ikkinchi buzilish - 1 daqiqa
+        assert "1 daqiqa" in out, out
+        now[0] += 30
+        start = len(session.calls)
+        await msg(S1, kb.BTN_HELP)
+        assert len(session.calls) == start
+        now[0] += 31
+        assert "Yordam</b>" in await msg(S1, kb.BTN_HELP)
+
+        now[0] += 700  # uzoq tinch turdi - jazo darajasi qaytadan boshlanadi
+        for _ in range(6):
+            out = await msg(S1, kb.BTN_HELP)
+        assert "10 soniya" in out, out
+
+        for _ in range(20):  # adminlar cheklanmaydi
+            assert "Yordam</b>" in await msg(ADMIN, kb.BTN_HELP)
+
+        start = len(session.calls)  # albom: 8 ta rasm bitta xabar hisoblanadi
+        for _ in range(8):
+            m = Message(message_id=next(ids), date=datetime.now(), chat=Chat(id=S2, type="private"),
+                        from_user=User(id=S2, is_bot=False, first_name="U"), media_group_id="album1",
+                        photo=[PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)])
+            await dp.feed_update(bot, Update(update_id=next(ids), message=m))
+        assert "Juda tez" not in texts(start), texts(start)
+    finally:
+        antiflood.LIMIT, antiflood.clock = old_limit, old_clock
 
 
 async def daily_and_backup_check():
@@ -175,17 +333,20 @@ async def daily_and_backup_check():
 
     # avtomatik: soat yetganda bir marta
     config.DAILY_HOUR = 0
-    for expected in (1, 1):  # ikkinchi ishga tushirish (qayta yoqilgan server) takror yubormaydi
-        task = asyncio.create_task(daily.daily_loop(bot, interval=0.05))
-        await asyncio.sleep(0.4)
+    def documents():
+        return len([m for m in session.calls[start:] if type(m).__name__ == "SendDocument"])
+
+    for _ in range(2):  # ikkinchi ishga tushirish (qayta yoqilgan server) takror yubormaydi
+        task = asyncio.create_task(daily.daily_loop(bot, interval=0.02))
+        await until(lambda: documents() >= 1)
+        await settle()  # bir necha aylanish: takror yuborilmasligini ko'rish uchun
         task.cancel()
-        sent = [m for m in session.calls[start:] if type(m).__name__ == "SendDocument"]
-        assert len(sent) == expected, len(sent)
+        assert documents() == 1, documents()
     assert "Kunlik hisobot" in texts(start)
     config.DAILY_HOUR = 24  # hali soati kelmagan
     await db.set_setting(daily.SETTING_KEY, "2000-01-01")
-    task = asyncio.create_task(daily.daily_loop(bot, interval=0.05))
-    await asyncio.sleep(0.3)
+    task = asyncio.create_task(daily.daily_loop(bot, interval=0.02))
+    await settle()
     task.cancel()
     assert len([m for m in session.calls[start:] if type(m).__name__ == "SendDocument"]) == 1
 
@@ -241,8 +402,7 @@ async def webhook_check():
             async with http.post(f"http://127.0.0.1:{port}/webhook/sekret", json=update,
                                  headers={"X-Telegram-Bot-Api-Secret-Token": "sekret"}) as r:
                 assert r.status == 200, r.status
-            await asyncio.sleep(0.5)
-            assert "Yordam</b>" in texts(start), texts(start)
+            await until(lambda: "Yordam</b>" in texts(start))
     finally:
         await runner.cleanup()
 
@@ -475,6 +635,84 @@ async def scenario():
     out = await cb(TEACHER, f"t:share:{tid}")
     assert code in out
 
+    # --- kalitni tahrirlash va qayta hisoblash
+    original_questions = (await db.get_test(tid))["questions"]
+
+    def score_of(uid):
+        return db.get_submission(tid, uid)
+
+    out = await cb(TEACHER, f"t:v:{tid}")
+    assert f"t:ed:{tid}" in last_markup_data() and "Kalit tahrirlangan" not in out
+    out = await cb(TEACHER, f"t:ed:{tid}")
+    assert "Kalitni tahrirlash" in out and "Javob yuborganlar: <b>3</b>" in out, out
+    assert f"t:edk:fix:{tid}" in last_markup_data() and f"t:edk:points:{tid}" in last_markup_data()
+    for data in (f"t:ed:{tid}", f"t:edk:fix:{tid}"):  # begona odam kira olmaydi
+        start = len(session.calls)
+        await cb(77, data)
+        assert "SendMessage" not in names(start), names(start)
+
+    out = await cb(TEACHER, f"t:edk:fix:{tid}")
+    assert "Ayrim savollarni tuzatish" in out, out
+    for wrong, error in (("9 B", "9-savol yo'q"), ("2 E", "faqat <b>A, B, C, D</b>"), ("2 -", "ko'rsatilmagan"),
+                         ("2 B\n2 C", "ikki marta"), ("salom", "tushunmadim")):
+        out = await msg(TEACHER, wrong)
+        assert error in out, (wrong, out)
+    out = await msg(TEACHER, "2 b")
+    assert "Hech narsa o'zgarmadi" in out, out
+    out = await msg(TEACHER, "2 C")
+    assert "2) <code>B</code> → <b><code>C</code></b>" in out, out
+    assert "<b>3</b> nafar ishtirokchining bali o'zgaradi: 📈 1 ta oshadi, 📉 2 ta kamayadi" in out, out
+    assert (await score_of(S1))["score"] == 5.2, "ko'rib chiqishda baza o'zgarib qoldi"
+    restart()  # tasdiqlashdan oldin server qayta yoqildi - tahrir yo'qolmasligi kerak
+    start = len(session.calls)
+    out = await cb(TEACHER, "ked:notify")
+    await settle()
+    assert "Kalit saqlandi" in out and "3 ta natija qayta hisoblandi" in out and "Kalit tahrirlangan" in out, out
+    assert "5.2 → <b>6.3</b>" in sent_to(start, S1) and "7.3 → <b>6.2</b>" in sent_to(start, S2), sent_to(start, S1)
+    assert "2.1 → <b>1</b>" in sent_to(start, S3), sent_to(start, S3)
+    assert [(await score_of(u))["score"] for u in (S1, S2, S3)] == [6.3, 6.2, 1.0]
+    out = await cb(S2, f"rating:{tid}")
+    assert out.index("Aliyev") < out.index("Bobur"), "reyting qayta tartiblanmadi"
+
+    await cb(TEACHER, f"t:edk:points:{tid}")
+    out = await cb(TEACHER, f"t:edp1:{tid}")
+    assert "Maksimal ball: 7.3 → <b>5</b>" in out, out
+    out = await msg(TEACHER, "1-5: 2")
+    assert "Maksimal ball: 7.3 → <b>10</b>" in out and "ked:notify" in last_markup_data(), out
+    start = len(session.calls)
+    out = await cb(TEACHER, "ked:save")  # xabarsiz saqlash
+    await settle()
+    assert "Kalit saqlandi" in out and not sent_to(start, S1), sent_to(start, S1)
+    assert (await score_of(S1))["score"] == 8.0 and (await score_of(S1))["max_score"] == 10.0
+
+    await cb(TEACHER, f"t:edk:full:{tid}")
+    out = await msg(TEACHER, "ABCD")
+    assert "<b>5</b> ta savol bor" in out and "sonini o'zgartirib bo'lmaydi" in out, out
+    out = await msg(TEACHER, "1. A\n2. B\n3. 0.5|1/2\n4. D\n5. Toshkent")
+    assert "2) <code>C</code> → <b><code>B</code></b>" in out, out
+    await cb(TEACHER, "ked:save")
+    await cb(TEACHER, f"t:edk:points:{tid}")
+    await msg(TEACHER, "1-2: 1.1; 3: 3.1")
+    await cb(TEACHER, "ked:save")
+    assert (await db.get_test(tid))["questions"] == original_questions, "asl kalitga qaytmadi"
+    assert [(await score_of(u))["score"] for u in (S1, S2, S3)] == [5.2, 7.3, 2.1]
+
+    # bir vaqtda ikki joydan tahrirlash: eski ma'lumot ustiga yozilmaydi
+    await cb(TEACHER, f"t:edk:fix:{tid}")
+    await msg(TEACHER, "1 D")
+    await services.apply_key(tid, [{**q, "p": 2.0} for q in services.questions_of(await db.get_test(tid))])
+    out = await cb(TEACHER, "ked:save")
+    assert "boshqa joydan o'zgartirildi" in out, out
+    await services.apply_key(tid, services.questions_of({"questions": original_questions}))
+    assert [(await score_of(u))["score"] for u in (S1, S2, S3)] == [5.2, 7.3, 2.1]
+
+    # bekor qilish holatni yopadi
+    await cb(TEACHER, f"t:edk:fix:{tid}")
+    out = await cb(TEACHER, f"t:ed:{tid}")
+    assert "Nimani o'zgartirasiz" in out
+    out = await msg(TEACHER, "5 A")
+    assert "tushunmadim" in out.lower(), out
+
     # --- moderatsiya: muallif ishtirokchini reytingdan chiqaradi / qaytaradi
     out = await cb(TEACHER, f"t:pl:{tid}:0")
     assert "ishtirokchilar (3 nafar)" in out and f"t:pu:{tid}:{S3}" in last_markup_data(), out
@@ -556,7 +794,7 @@ async def scenario():
     await cb(TEACHER, f"t:fin:{tid}")
     start = len(session.calls)
     out = await cb(TEACHER, f"t:finok:{tid}")
-    await asyncio.sleep(0.5)  # ishtirokchilarga fon xabarlari
+    await settle()
     out = texts(start)
     assert "Test yakunlandi" in out and "Yakuniy o'rningiz: <b>1 / 3</b>" in out, out
     assert "SendDocument" in names(start)
@@ -632,7 +870,8 @@ async def scenario():
     assert "yakunlangan" in out, out
     start = len(session.calls)
     watcher = asyncio.create_task(services.deadline_watcher(bot))
-    await asyncio.sleep(0.6)
+    await until(lambda: "avtomatik yakunlandi" in texts(start) and "Yakuniy o'rningiz" in texts(start))
+    await settle()
     watcher.cancel()
     out = texts(start)
     assert "avtomatik yakunlandi" in out and "Yakuniy o'rningiz" in out, out
@@ -681,7 +920,7 @@ async def scenario():
     data = [d for d in last_markup_data() if d.startswith("adm:bcgo:")]
     start = len(session.calls)
     await cb(ADMIN, data[0])
-    await asyncio.sleep(1.0)
+    await settle()
     assert names(start).count("CopyMessage") == 5, names(start)  # 6 kishi - 1 bloklangan
     assert "Yetkazildi: 5" in texts(start) and "PinChatMessage" not in names(start)
     # pin bilan tarqatish va pinni olib tashlash
@@ -692,14 +931,14 @@ async def scenario():
     await cb(S1, data[0])  # oddiy foydalanuvchi tarqata olmaydi
     assert "CopyMessage" not in names(start)
     await cb(ADMIN, data[0])
-    await asyncio.sleep(1.0)
+    await settle()
     assert names(start).count("CopyMessage") == 5 and names(start).count("PinChatMessage") == 5, names(start)
     assert "Pin qilindi: 5" in texts(start) and "adm:unpin" in last_markup_data()
     out = await cb(ADMIN, "adm:unpin")
     assert "Davom etilsinmi" in out
     start = len(session.calls)
     await cb(ADMIN, "adm:unpinok")
-    await asyncio.sleep(1.0)
+    await settle()
     assert names(start).count("UnpinChatMessage") == 5 and "Tekshirildi: 5" in texts(start), names(start)
 
     # --- adminlarni bot ichidan boshqarish

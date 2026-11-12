@@ -87,7 +87,8 @@ async def _view(test):
         f"👥 Ishtirokchilar: <b>{participants}</b> nafar\n"
         f"📅 Yaratilgan: {services.to_local(test['created_at'])}\n"
         f"⏰ Muddat: {services.to_local(test['deadline']) + ' gacha' if test['deadline'] else 'belgilanmagan'}\n"
-        f"Holati: {status}"
+        + (f"✏️ Kalit tahrirlangan: {services.to_local(test['edited_at'])}\n" if test["edited_at"] else "")
+        + f"Holati: {status}"
     )
     tid = test["id"]
     kb = InlineKeyboardBuilder()
@@ -95,7 +96,8 @@ async def _view(test):
            InlineKeyboardButton(text="📥 Excel hisobot", callback_data=f"t:xl:{tid}"))
     kb.row(InlineKeyboardButton(text="👥 Ishtirokchilar", callback_data=f"t:pl:{tid}:0"),
            InlineKeyboardButton(text="🔑 Kalit", callback_data=f"t:key:{tid}"))
-    kb.row(InlineKeyboardButton(text="🔗 Ulashish", callback_data=f"t:share:{tid}"))
+    kb.row(InlineKeyboardButton(text="✏️ Kalitni tahrirlash", callback_data=f"t:ed:{tid}"),
+           InlineKeyboardButton(text="🔗 Ulashish", callback_data=f"t:share:{tid}"))
     if active:
         kb.row(InlineKeyboardButton(text="🏁 Testni yakunlash", callback_data=f"t:fin:{tid}"))
     kb.row(InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"t:del:{tid}"),
@@ -414,6 +416,11 @@ STATE_HINTS = {
     "Admin:badword": "taqiqlanadigan so'zni <b>matn</b> ko'rinishida yuboring",
     "Admin:certtext": "qiymatni <b>matn</b> ko'rinishida yuboring (o'chirish uchun: <code>-</code>)",
     "Admin:certlogo": "logotipni <b>rasm</b> yoki PNG fayl ko'rinishida yuboring",
+    "KeyEdit:fix": "tuzatishlarni <b>savol raqami va yangi javob</b> ko'rinishida yuboring "
+                   "(masalan: <code>5 B</code>)",
+    "KeyEdit:full": "barcha savollarning to'g'ri javobini yuboring (masalan: <code>1A2B3C4D</code>)",
+    "KeyEdit:points": "ballarni yuboring (masalan: <code>1-10: 1.1; 11-20: 2.1</code>)",
+    "KeyEdit:confirm": "yuqoridagi <b>«✅ Saqlash»</b> yoki <b>«❌ Bekor qilish»</b> tugmasini bosing",
     "Admin:addadmin": "yangi adminning ID raqamini yuboring yoki uning xabarini forward qiling",
 }
 

@@ -228,27 +228,100 @@ async def finish_and_notify(bot: Bot, test_id: int, auto: bool = False) -> bool:
     return True
 
 
-async def _notify_participants(bot: Bot, test, subs: list) -> None:
-    total = len(subs)
-    for pos, sub in enumerate(subs, start=1):
-        text = (
-            f"🏁 <b>{escape(test['title'])}</b> testi yakunlandi!\n\n"
-            f"🏅 Yakuniy o'rningiz: <b>{pos} / {total}</b>\n"
-            f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b>\n\n"
-            "To'g'ri javoblarni «📊 Natijalarim» bo'limida ko'rishingiz mumkin."
-        )
+async def send_many(bot: Bot, messages: list[tuple[int, str]], reply_markup=None) -> int:
+    """Ko'p foydalanuvchiga xabar: Telegram cheklovlariga rioya qiladi. Yetkazilganlar sonini qaytaradi."""
+    sent = 0
+    for user_id, text in messages:
         for _ in range(2):
             try:
-                await bot.send_message(sub["user_id"], text, reply_markup=result_kb(test["id"]))
+                await bot.send_message(user_id, text, reply_markup=reply_markup)
+                sent += 1
                 break
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)
             except TelegramForbiddenError:
-                await db.set_inactive(sub["user_id"])
+                await db.set_inactive(user_id)
                 break
             except TelegramAPIError:
                 break
         await asyncio.sleep(0.05)
+    return sent
+
+
+async def _notify_participants(bot: Bot, test, subs: list) -> None:
+    total = len(subs)
+    messages = [
+        (sub["user_id"],
+         f"🏁 <b>{escape(test['title'])}</b> testi yakunlandi!\n\n"
+         f"🏅 Yakuniy o'rningiz: <b>{pos} / {total}</b>\n"
+         f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b>\n\n"
+         "To'g'ri javoblarni «📊 Natijalarim» bo'limida ko'rishingiz mumkin.")
+        for pos, sub in enumerate(subs, start=1)
+    ]
+    await send_many(bot, messages, reply_markup=result_kb(test["id"]))
+
+
+# ---------------------------------------------------------------- kalitni tahrirlash va qayta hisoblash
+_test_locks: dict[int, asyncio.Lock] = {}
+
+
+def test_lock(test_id: int) -> asyncio.Lock:
+    """Bitta test bo'yicha javob qabul qilish va qayta hisoblashni navbatga qo'yadi.
+
+    Aks holda qayta hisoblash paytida kelgan javob eski kalit bilan baholanib qolishi mumkin edi.
+    """
+    lock = _test_locks.get(test_id)
+    if lock is None:
+        if len(_test_locks) > 5000:
+            for key in [k for k, v in _test_locks.items() if not v.locked()]:
+                del _test_locks[key]
+        lock = _test_locks[test_id] = asyncio.Lock()
+    return lock
+
+
+def regrade_preview(questions: list[dict], subs: list) -> list[dict]:
+    """Yangi kalit bilan qaysi natijalar o'zgarishini hisoblaydi (bazaga yozmaydi)."""
+    changes = []
+    for sub in subs:
+        res = kp.grade(questions, json.loads(sub["answers"]))
+        old = (sub["score"], sub["correct_count"], sub["max_score"])
+        if (res["score"], res["correct"], res["max_score"]) != old:
+            changes.append({
+                "id": sub["id"], "user_id": sub["user_id"], "hidden": bool(sub["is_hidden"]),
+                "old_score": sub["score"], "old_correct": sub["correct_count"], "old_max": sub["max_score"],
+                "score": res["score"], "correct": res["correct"], "max_score": res["max_score"],
+            })
+    return changes
+
+
+async def apply_key(test_id: int, questions: list[dict]) -> list[dict]:
+    """Kalit/ballarni saqlaydi va barcha natijalarni qayta hisoblaydi. O'zgargan natijalarni qaytaradi."""
+    async with test_lock(test_id):
+        await db.update_questions(test_id, questions)
+        changes = regrade_preview(questions, list(await db.submissions_all(test_id)))
+        for change in changes:
+            await db.update_grade(change["id"], change["correct"], change["score"], change["max_score"])
+    return changes
+
+
+async def notify_regrade(bot: Bot, test, changes: list[dict]) -> int:
+    finished = not is_open(test)
+    messages = []
+    for c in changes:
+        if c["hidden"]:
+            continue
+        arrow = "📈" if c["score"] > c["old_score"] else "📉" if c["score"] < c["old_score"] else "🔄"
+        messages.append((
+            c["user_id"],
+            f"🔄 <b>{escape(test['title'])}</b> — natijangiz yangilandi\n\n"
+            "Test muallifi javoblar kalitini tuzatdi va barcha natijalar qayta hisoblandi.\n\n"
+            f"{arrow} Ball: {kp.fmt_num(c['old_score'])} → <b>{kp.fmt_num(c['score'])}</b> "
+            f"/ {kp.fmt_num(c['max_score'])}\n"
+            f"✅ To'g'ri javoblar: {c['old_correct']} → <b>{c['correct']}</b>\n\n"
+            + ("<i>Reytingdagi o'rningiz ham o'zgargan bo'lishi mumkin. </i>" if finished else "")
+            + "<i>Avval sertifikat olgan bo'lsangiz, yangisini oling — eskisi endi amal qilmaydi.</i>",
+        ))
+    return await send_many(bot, messages, reply_markup=result_kb(test["id"]))
 
 
 _deadlines_dirty = True

@@ -899,3 +899,24 @@ async def cert_sample(callback: CallbackQuery) -> None:
             InlineKeyboardButton(text="⬅️ Sertifikat sozlamalari", callback_data="adm:cert"),
         ]]),
     )
+
+
+# ---------------------------------------------------------------- xato xabarlarini sinash
+@router.message(Command("alerttest"))
+async def alert_test(message: Message) -> None:
+    from ..config import ERROR_ALERTS
+
+    if not admins.is_super(message.from_user.id):
+        await message.answer("Bu buyruq faqat bosh admin uchun.")
+        return
+    if not ERROR_ALERTS:
+        await message.answer("ℹ️ Xatolar haqida xabar o'chirilgan (ERROR_ALERTS=0).")
+        return
+    try:
+        raise RuntimeError("Bu sinov xatosi — hammasi joyida")
+    except RuntimeError:
+        log.exception("Sinov: xato xabari to'g'ri ishlayaptimi (/alerttest)")
+    await message.answer(
+        "✅ Sinov xatosi yaratildi. Bir necha soniyada sizga «🚨 Botda xatolik» xabari kelishi kerak.\n\n"
+        "<i>Botda haqiqiy xato chiqqanda xuddi shunday xabar keladi: qayerda, kimda va nima sababdan.</i>"
+    )

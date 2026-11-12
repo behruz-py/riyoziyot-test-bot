@@ -113,6 +113,54 @@ def build_questions(answers: list[str]) -> list[dict]:
     return questions
 
 
+_RE_CORRECTION = re.compile(r"^(\d+)\s*[.):=]?\s*(\S.*)$", re.S)
+
+
+def parse_corrections(text: str, n: int) -> dict[int, str]:
+    """Alohida savollarni tuzatish: har qatorda (yoki ";" bilan) "5 B", "5. B", "5B", "7 = 12.5".
+
+    Qaytaradi: {savol raqami (1 dan): yangi to'g'ri javob}.
+    """
+    text = (text or "").translate(_HOMOGLYPHS).translate(_APOSTROPHES).strip()
+    items = [x.strip() for x in re.split(r"[\n;]+", text) if x.strip()]
+    if not items:
+        raise ParseError("Tuzatishlar bo'sh.")
+    result: dict[int, str] = {}
+    for item in items:
+        m = _RE_CORRECTION.match(item)
+        if not m:
+            raise ParseError(
+                f"«{item[:30]}» ni tushunmadim. Har bir tuzatish <b>savol raqami va yangi javob</b> bo'lishi kerak, "
+                "masalan: <code>5 B</code> yoki <code>7. 12.5</code>"
+            )
+        num, answer = int(m.group(1)), _clean(m.group(2))
+        if not 1 <= num <= n:
+            raise ParseError(f"{num}-savol yo'q — testda {n} ta savol bor.")
+        if num in result:
+            raise ParseError(f"{num}-savol ikki marta yozilgan.")
+        if answer == SKIP or not answer.strip("| "):
+            raise ParseError(f"{num}-savolning yangi javobi ko'rsatilmagan.")
+        if answer in _NOT_OPTIONS:
+            raise ParseError(
+                f"{num}-savolda «{answer.upper()}» yozilgan, lekin bunday variant yo'q — "
+                "variantlar faqat <b>A, B, C, D</b>."
+            )
+        if len(answer) > MAX_OPEN_ANSWER_LEN:
+            raise ParseError(f"{num}-savolning javobi juda uzun (ko'pi bilan {MAX_OPEN_ANSWER_LEN} belgi).")
+        result[num] = answer
+    return result
+
+
+def apply_answers(questions: list[dict], answers: dict[int, str]) -> list[dict]:
+    """Savollar nusxasini qaytaradi: berilgan savollarning javobi (va turi) almashadi, ballar saqlanadi."""
+    updated = [dict(q) for q in questions]
+    for num, answer in answers.items():
+        q = updated[num - 1]
+        q["a"] = answer
+        q["t"] = "c" if len(answer) == 1 and answer in LETTERS else "o"
+    return updated
+
+
 def parse_points(text: str, n: int) -> list[float]:
     """"1-10: 1.1; 11-20: 2.1; 21: 3.1" ko'rinishidagi matndan ballar ro'yxati (ko'rsatilmaganlari 1 ball)."""
     text = (text or "").strip()
