@@ -45,12 +45,12 @@ def answer_guide(questions: list[dict]) -> str:
     if not open_nums:
         return (
             "✍️ <b>Javoblaringizni bitta xabarda yuboring</b>\n"
-            "Namuna: <code>abcdabcd…</code> yoki <code>1a2b3c4d…</code>\n"
+            "Namuna: <code>1A2B3C4D…</code> yoki <code>ABCDABCD…</code>\n"
             "Javob bermaydigan savolga <code>-</code> qo'ying."
         )
     return (
         "✍️ <b>Javoblaringizni bitta xabarda, har birini yangi qatordan yuboring</b>\n"
-        "<code>1. a\n2. c\n3. 12.5</code>\n"
+        "<code>1. A\n2. C\n3. 12.5</code>\n"
         f"Ochiq (yozma) javobli savollar: <b>{', '.join(open_nums)}</b>\n"
         "Javob bermaydigan savolga <code>-</code> qo'ying."
     )
@@ -62,7 +62,7 @@ async def ask_code(bot: Bot, user_id: int, state: FSMContext) -> None:
         user_id,
         "✅ <b>Javobni tekshirish</b>\n\n"
         "🔢 O'qituvchingiz bergan <b>test kodini</b> yuboring.\n\n"
-        "💡 <i>Tezkor usul: kod va javoblarni birga yuborish mumkin — </i><code>12345*abcdabcd</code>",
+        "💡 <i>Tezkor usul: kod va javoblarni birga yuborish mumkin — </i><code>12345*1A2B3C4D</code>",
         reply_markup=flow_kb(placeholder="Test kodi"),
     )
 

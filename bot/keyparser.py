@@ -1,15 +1,17 @@
 """Javoblar kalitini va o'quvchi javoblarini o'qish hamda tekshirish.
 
 Qo'llab-quvvatlanadigan formatlar:
-  1) Ixcham:        abcdabcd            (har bir harf - bitta savol)
-  2) Raqamli:       1a2b3c4d  yoki  1a 2b 3c
+  1) Ixcham:        ABCDABCD            (har bir harf - bitta savol)
+  2) Raqamli:       1A2B3C4D  yoki  1A 2B 3C
   3) Qatorma-qator: har qatorda bitta javob (ochiq javoblar uchun)
          1. a
          2. 12.5
          3. x=2
      yoki ";" bilan ajratib:  a; 12.5; x=2
 
-Bitta harf (a-f) -> variantli savol, boshqa har qanday qiymat -> ochiq javob.
+Bitta harf (A-D) -> variantli savol, boshqa har qanday qiymat -> ochiq javob.
+Katta-kichik harf farq qilmaydi; ichkarida kichik harf saqlanadi, ko'rsatishda katta harf (fmt_answer).
+E yoki F yozilsa - xato (eski odat yoki xato terilgan), jim o'tkazib yuborilmaydi.
 "-" -> javob berilmagan (faqat o'quvchi javobida).
 Ochiq javob kalitida "|" bilan bir nechta to'g'ri variant berish mumkin: 0.5|1/2
 """
@@ -20,11 +22,13 @@ from fractions import Fraction
 
 from .config import MAX_OPEN_ANSWER_LEN, MAX_QUESTIONS
 
-LETTERS = "abcdef"
+LETTERS = "abcd"
+# Ixcham formatni tanib olish uchun kengroq oraliq: "ABCDE" ixcham kalit deb tanilib, E uchun aniq xato beriladi
+_NOT_OPTIONS = "ef"
 SKIP = "-"
 
 # Lotin harfiga aynan o'xshash kirill harflari (klaviatura almashmay qolganda)
-_HOMOGLYPHS = str.maketrans({"а": "a", "А": "A", "с": "c", "С": "C", "е": "e", "Е": "E"})
+_HOMOGLYPHS = str.maketrans({"а": "a", "А": "A", "с": "c", "С": "C", "В": "B", "е": "e", "Е": "E"})
 _APOSTROPHES = str.maketrans({"‘": "'", "’": "'", "`": "'", "ʻ": "'", "ʼ": "'", "−": "-", "–": "-", "—": "-"})
 
 _RE_COMPACT_LETTERS = re.compile(r"[a-f\-]+")
@@ -52,7 +56,7 @@ def _check_sequence(numbers: list[int]) -> None:
 
 def _clean(ans: str) -> str:
     ans = ans.strip()
-    if len(ans) == 1 and ans.lower() in LETTERS:
+    if len(ans) == 1 and ans.lower() in LETTERS + _NOT_OPTIONS:
         return ans.lower()
     return ans
 
@@ -82,6 +86,12 @@ def parse_answers(text: str) -> list[str]:
         else:
             answers = [_clean(x) for x in items]
 
+    for i, a in enumerate(answers, start=1):
+        if a in _NOT_OPTIONS:
+            raise ParseError(
+                f"{i}-savolda «{a.upper()}» yozilgan, lekin bunday variant yo'q — "
+                "variantlar faqat <b>A, B, C, D</b>."
+            )
     if len(answers) > MAX_QUESTIONS:
         raise ParseError(f"Savollar soni {MAX_QUESTIONS} tadan oshmasligi kerak.")
     for i, a in enumerate(answers, start=1):
@@ -165,8 +175,8 @@ def validate_answers(questions: list[dict], answers: list[str]) -> str | None:
     for i, (q, a) in enumerate(zip(questions, answers), start=1):
         if q["t"] == "c" and a != SKIP and not (len(a) == 1 and a in LETTERS):
             return (
-                f"{i}-savol variantli (A–F), lekin siz «{a[:20]}» deb yubordingiz. "
-                "Variantli savolga faqat bitta lotin harfi yoziladi."
+                f"{i}-savol variantli, lekin siz «{a[:20]}» deb yubordingiz. "
+                "Variantli savolga faqat bitta harf yoziladi: A, B, C yoki D."
             )
     return None
 

@@ -624,7 +624,7 @@ async def scenario():
     await cb(TEACHER, "cr:ok")
     t2 = (await db.tests_by_owner(TEACHER, 10, 0))[0]
     out = await msg(S1, f"{t2['code']}*abca")
-    assert "1.A  2.B  3.C  4.A" in out, out
+    assert "1A  2B  3C  4A" in out, out
     out = await cb(S1, "sv:ok")
     assert "3 / 4" in out, out
     await db._exec("UPDATE tests SET deadline='2000-01-01 00:00:00' WHERE id=?", (t2["id"],))

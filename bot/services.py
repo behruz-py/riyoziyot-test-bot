@@ -99,7 +99,7 @@ async def edit_or_send(callback: CallbackQuery, text: str, reply_markup=None) ->
 def key_preview(questions: list[dict]) -> list[str]:
     """Kalitni ko'rsatish uchun qatorlar."""
     if all(q["t"] == "c" for q in questions):
-        cells = [f"{i}.{q['a'].upper()}" for i, q in enumerate(questions, start=1)]
+        cells = [f"{i}{kp.fmt_answer(q['a'])}" for i, q in enumerate(questions, start=1)]
         return ["<code>" + "  ".join(cells[i:i + 5]) + "</code>" for i in range(0, len(cells), 5)]
     lines = []
     for i, q in enumerate(questions, start=1):
@@ -111,7 +111,7 @@ def key_preview(questions: list[dict]) -> list[str]:
 def answers_preview(answers: list[str]) -> list[str]:
     """O'quvchi javoblarini tasdiqlash oynasida ko'rsatish uchun qatorlar."""
     if all(a == kp.SKIP or (len(a) == 1 and a in kp.LETTERS) for a in answers):
-        cells = [f"{i}.{kp.fmt_answer(a)}" for i, a in enumerate(answers, start=1)]
+        cells = [f"{i}{kp.fmt_answer(a)}" for i, a in enumerate(answers, start=1)]
         return ["<code>" + "  ".join(cells[i:i + 5]) + "</code>" for i in range(0, len(cells), 5)]
     return [f"{i}) <code>{escape(kp.fmt_answer(a))}</code>" for i, a in enumerate(answers, start=1)]
 

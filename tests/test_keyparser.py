@@ -21,8 +21,26 @@ def main():
     assert kp.parse_answers("1a2-3c") == ["a", "-", "c"]
     assert raises(kp.parse_answers, "1a2b4c")  # raqam tushib qolgan
     assert raises(kp.parse_answers, "")
-    # Kirill homogliflari (а, с, е)
+    # Kirill homogliflari (а, с, В)
     assert kp.parse_answers("аbсd") == list("abcd")
+    assert kp.parse_answers("АВСD") == list("abcd")
+
+    # Faqat A-D: katta harf bilan ham, E/F - aniq xato
+    assert kp.parse_answers("ABCDABCD") == list("abcdabcd")
+    assert kp.parse_answers("1A2B3C4D") == list("abcd")
+    assert kp.parse_answers("1A 2b 3C 4d") == list("abcd")
+    assert kp.parse_answers("1. A\n2. 12.5\n3. D") == ["a", "12.5", "d"]
+    for bad in ("abcde", "ABCDF", "1A2B3E", "1. a\n2. e", "1a\n2f", "a;b;e"):
+        try:
+            kp.parse_answers(bad)
+            raise AssertionError(f"E/F qabul qilindi: {bad!r}")
+        except kp.ParseError as e:
+            assert "faqat <b>A, B, C, D</b>" in str(e), str(e)
+    try:
+        kp.parse_answers("abcde")
+    except kp.ParseError as e:
+        assert str(e).startswith("5-savolda «E»"), str(e)
+    assert kp.fmt_answer("b") == "B" and kp.fmt_answer("x=2") == "x=2" and kp.fmt_answer("-") == "—"
 
     # Qatorma-qator format
     assert kp.parse_answers("1. a\n2. 12.5\n3. x=2") == ["a", "12.5", "x=2"]
@@ -73,6 +91,7 @@ def main():
     assert res["score"] == 4.5 and res["max_score"] == 7.5
     assert kp.validate_answers(qs, ["a", "b"]) is not None
     assert kp.validate_answers(qs, ["a", "xyz", "1", "d"]) is not None  # variantli savolga matn
+    assert "A, B, C yoki D" in kp.validate_answers(qs, ["a", "xyz", "1", "d"])
 
     assert kp.fmt_num(4.5) == "4.5" and kp.fmt_num(3.0) == "3" and kp.fmt_num(0) == "0"
     assert kp.fmt_num(33.300000001) == "33.3"

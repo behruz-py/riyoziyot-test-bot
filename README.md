@@ -5,10 +5,10 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 ## Imkoniyatlar
 
 - **Test yaratish** (har qanday foydalanuvchi): nom → javoblar kaliti → ball tizimi → muddat (ixtiyoriy).
-  - Variantli (A–F) va ochiq (yozma) javobli savollar; ochiq javobda bir nechta to'g'ri variant (`0.5|1/2`).
+  - Variantli (A, B, C, D) va ochiq (yozma) javobli savollar; ochiq javobda bir nechta to'g'ri variant (`0.5|1/2`).
   - Har bir savol 1 ball yoki savollarga alohida ball (`1-10: 1.1; 11-20: 2.1`).
   - Muddatsiz yoki muddatli; muddat tugagach test avtomatik yakunlanadi.
-- **Javobni tekshirish**: kod → javoblar, yoki tezkor `12345*abcd...`, yoki havola orqali (`t.me/bot?start=test_12345`).
+- **Javobni tekshirish**: kod → javoblar, yoki tezkor `12345*1A2B3C...`, yoki havola orqali (`t.me/bot?start=test_12345`).
   - Har bir testga bir marta javob yuboriladi. Natija: to'g'ri javoblar soni, ball, foiz, o'rin, xato va javobsiz savollar.
   - To'g'ri javoblar faqat test yakunlangach ochiladi (kalit tarqalib ketmasligi uchun).
 - **Reyting**: ball bo'yicha, teng bo'lsa — oldin topshirgan yuqorida. Faqat ishtirokchi, muallif va adminlar ko'radi.
