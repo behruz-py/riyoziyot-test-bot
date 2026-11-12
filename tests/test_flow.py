@@ -1120,9 +1120,10 @@ async def scenario():
     assert f"t:rp:{tid}:10:0" in last_markup_data(), last_markup_data()
     out = await cb(TEACHER, f"t:rp:{tid}:10:0")
     assert "🏆 <b>Algebra &lt;9-sinf&gt; &amp; nazorat</b> — natijalar" in out, out
-    assert "Qatnashchilar: <b>3</b> nafar · 📈 O'rtacha: <b>67%</b>" in out, out
+    assert "Qatnashchilar" not in out and "O'rtacha" not in out and "%" not in out.split("👆")[0], out
+    assert "🥇 Bobur Mirzo — <b>7.3</b>" in out and "/5" not in out, out  # ball tizimi yoqilgan: faqat ball
     assert out.index("🥇 Bobur Mirzo") < out.index("🥈 Aliyev Vali") < out.index("🥉 Ishtirokchi 23"), out  # ismi bekor qilingan
-    assert "To'g'ri javoblar:" not in out and "@test_bot" in out and "Nusxalash" in out, out
+    assert "To'g'ri javoblar:" not in out and "Natijalarim" not in out and "Nusxalash" in out, out
     assert f"t:rp:{tid}:10:1" in last_markup_data() and f"t:rp:{tid}:0:0" not in last_markup_data()  # 3 kishi < 10
     out = await cb(TEACHER, f"t:rp:{tid}:10:1")
     assert "🔑 <b>To'g'ri javoblar:</b>" in out and "1A  2B  3C  4D  5A" in out, out

@@ -12,7 +12,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import db, features, keyparser as kp, services
 from ..config import ADMIN_IDS, is_admin
-from ..keyboards import BTN_MY_TESTS, NO_PREVIEW, flow_kb, home_btn, main_menu, pager
+from ..keyboards import BTN_MY_TESTS, flow_kb, home_btn, main_menu, pager
 from .create import send_post
 
 router = Router(name="mytests")
@@ -162,26 +162,21 @@ async def test_results(callback: CallbackQuery, user) -> None:
 RESULTS_POST_MAX = 50
 
 
-def results_post(test, subs: list, bot_username: str, top: int, with_key: bool) -> str:
+def results_post(test, subs: list, top: int, with_key: bool) -> str:
     """Kanalda e'lon qilish uchun natijalar matni. top=0 - hammasi (ko'pi bilan RESULTS_POST_MAX)."""
     questions = services.questions_of(test)
-    n = len(questions)
     finished = not services.is_open(test)
     total = len(subs)
     limit = min(top or RESULTS_POST_MAX, RESULTS_POST_MAX)
-    average = sum(services.sub_percent(s, n) for s in subs) / total if total else 0
-    lines = [
-        f"🏆 <b>{escape(test['title'])}</b> — " + ("natijalar" if finished else "joriy natijalar"),
-        "",
-        f"👥 Qatnashchilar: <b>{total}</b> nafar · 📈 O'rtacha: <b>{services.pct_text(average)}</b>",
-        "",
-        *[services.rank_line(pos, s, n) for pos, s in enumerate(subs[:limit], start=1)],
-    ]
+    lines = [f"🏆 <b>{escape(test['title'])}</b> — " + ("natijalar" if finished else "joriy natijalar"), ""]
+    for pos, sub in enumerate(subs[:limit], start=1):
+        # Faqat natija soni: ball tizimida - ball, aks holda - to'g'ri javoblar soni
+        value = kp.fmt_num(sub["score"]) if services.points_on() else str(sub["correct_count"])
+        lines.append(f"{services.MEDALS.get(pos, f'{pos}.')} {escape(sub['full_name'])} — <b>{value}</b>")
     if total > limit:
         lines.append(f"… va yana {total - limit} nafar")
     if with_key and finished:
         lines += ["", "🔑 <b>To'g'ri javoblar:</b>", *services.key_preview(questions)]
-    lines += ["", f"<i>Batafsil natijangiz: @{bot_username} → «📊 Natijalarim»</i>"]
     return "\n".join(lines)
 
 
@@ -201,10 +196,7 @@ async def results_post_cb(callback: CallbackQuery, user) -> None:
         await callback.answer("To'g'ri javoblarni faqat test yakunlangach qo'shish mumkin.", show_alert=True)
         return
     await callback.answer()
-    me = await callback.bot.me()
-    await callback.bot.send_message(
-        user["id"], results_post(test, subs, me.username, top, with_key), link_preview_options=NO_PREVIEW
-    )
+    await callback.bot.send_message(user["id"], results_post(test, subs, top, with_key))
     kb = InlineKeyboardBuilder()
     if len(subs) > 10:
         kb.row(InlineKeyboardButton(text="📋 Hammasini ko'rsatish" if top else "🔝 Faqat eng yaxshi 10 ta",
