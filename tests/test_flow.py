@@ -134,17 +134,6 @@ def restart():
     dp = build_dispatcher()
 
 
-def last_post_url() -> str | None:
-    """Oxirgi yuborilgan URL tugmali xabardagi havola."""
-    for m in reversed(session.calls):
-        rm = getattr(m, "reply_markup", None)
-        if rm is not None and hasattr(rm, "inline_keyboard"):
-            urls = [b.url for row in rm.inline_keyboard for b in row if b.url]
-            if urls:
-                return urls[0]
-    return None
-
-
 def last_reply_keyboard() -> list[str]:
     """Oxirgi yuborilgan pastki (reply) klaviatura tugmalari."""
     for m in reversed(session.calls):
@@ -684,7 +673,9 @@ async def scenario():
     code, tid = test["code"], test["id"]
     assert f"Test kodi: <code>{code}</code>" in out and "Savollar soni: <b>5 ta</b>" in out, out
     assert "Muallif: Ustoz Karimov" in out and "@test_bot" in out, out
-    assert last_post_url() == f"https://t.me/test_bot?start=test_{code}", last_post_url()
+    assert f"👉 https://t.me/test_bot?start=test_{code}" in out and "Nusxalash" in out, out
+    post = [m for m in session.calls if type(m).__name__ == "SendMessage" and "Test kodi" in (m.text or "")][-1]
+    assert post.reply_markup is None, "postda tugma bo'lmasligi kerak (nusxalashda yo'qoladi)"
     assert f"t:note:{tid}" in last_markup_data() and "go:create" in last_markup_data()
 
     # --- muallif o'z testiga javob yubora olmaydi

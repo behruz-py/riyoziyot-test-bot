@@ -352,8 +352,12 @@ async def create_cancel(callback: CallbackQuery, state: FSMContext, user) -> Non
 
 
 # ---------------------------------------------------------------- o'quvchilar uchun tayyor post
-async def build_post(bot: Bot, test) -> tuple[str, InlineKeyboardMarkup]:
-    """Forward qilinadigan post: test haqida ma'lumot va «Javoblarni yuborish» tugmasi."""
+async def build_post(bot: Bot, test) -> str:
+    """Muallif nusxalab kanaliga joylaydigan post matni.
+
+    Tugma ataylab yo'q: Telegram nusxalashda ("Hide sender name" ham) tugmalarni olib tashlaydi. Havola esa
+    matnning o'zida ochiq ko'rinishda turadi - shuning uchun istalgan joyga nusxalanganda ham ishlaydi.
+    """
     questions = services.questions_of(test)
     owner = await db.get_user(test["owner_id"])
     me = await bot.me()
@@ -371,18 +375,17 @@ async def build_post(bot: Bot, test) -> tuple[str, InlineKeyboardMarkup]:
         "",
         f"🔢 Test kodi: <code>{test['code']}</code>",
         "",
-        "📲 <b>Qanday qatnashiladi?</b>",
-        f"Pastdagi tugmani bosing yoki @{me.username} ga test kodini yuboring. "
-        "Javoblar namunasi: <code>1A2B3C4D…</code>",
+        "📲 <b>Javoblarni yuborish uchun havolani bosing:</b>",
+        f"👉 {link}",
+        "",
+        f"<i>Yoki @{me.username} ga test kodini yuboring. Javoblar namunasi: 1A2B3C4D…</i>",
     ]
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Javoblarni yuborish", url=link)]])
-    return "\n".join(lines), kb
+    return "\n".join(lines)
 
 
 async def send_post(bot: Bot, user_id: int, test, created: bool = False) -> None:
     """Postni va uning ostida muallif uchun boshqaruv tugmalarini yuboradi."""
-    text, kb = await build_post(bot, test)
-    await bot.send_message(user_id, text, reply_markup=kb, link_preview_options=NO_PREVIEW)
+    await bot.send_message(user_id, await build_post(bot, test), link_preview_options=NO_PREVIEW)
     tid = test["id"]
     controls = InlineKeyboardBuilder()
     note_on = features.on("post_note")
@@ -399,8 +402,9 @@ async def send_post(bot: Bot, user_id: int, test, created: bool = False) -> None
     await bot.send_message(
         user_id,
         "👆 <b>O'quvchilar uchun tayyor post.</b>\n\n"
-        "Uni o'quvchilaringizga yoki kanal/guruhingizga <b>forward</b> qiling — «✅ Javoblarni yuborish» "
-        "tugmasi ham birga o'tadi: bosgan odamga bot darhol shu testni ochadi."
+        "<b>Qanday joylanadi:</b> postni bosib turing → <b>«Nusxalash»</b> (Copy) → kanal yoki guruhingizga "
+        "joylang (Paste).\n\n"
+        "Postdagi havola nusxada ham ishlaydi: uni bosgan o'quvchiga bot darhol shu testni ochadi."
         + ("\n\n<i>Postga o'z izohingizni qo'shishingiz mumkin, masalan: «9-B sinf, 2-chorak nazorat ishi. "
            "Omad!»</i>" if note_on else ""),
         reply_markup=controls.as_markup(),
