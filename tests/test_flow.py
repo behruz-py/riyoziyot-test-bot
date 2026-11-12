@@ -343,12 +343,10 @@ async def features_check():
     assert "qabul qilindi" in out and "Javoblaringizni tekshiring" not in out, out
 
     # --- faol test uchun natijalar posti: joriy natijalar, kalitsiz
-    out = await cb(TEACHER, f"t:rp:{t3['id']}:10:0")
+    out = await cb(TEACHER, f"t:rp:{t3['id']}:10:1")  # standart tugma - javoblar bilan
     assert "joriy natijalar" in out and "To'g'ri javoblar:" not in out and "yakunlangach" in out, out
     assert not any(d.endswith(":1") and d.startswith("t:rp:") for d in last_markup_data()), last_markup_data()
-    start = len(session.calls)
-    await cb(TEACHER, f"t:rp:{t3['id']}:10:1")  # kalitni majburan so'rash
-    assert "SendMessage" not in names(start) and "yakunlangach" in last_answer_text(start), names(start)
+    assert "avtomatik qo'shiladi" in out, out
 
     # --- muallif paneli: Excel, ishtirokchilar, kalitni tahrirlash, izoh
     for key in ("excel", "participants", "key_edit", "post_note"):
@@ -1119,17 +1117,19 @@ async def scenario():
 
     # --- natijalarni e'lon qilish uchun post
     out = await cb(TEACHER, f"t:v:{tid}")
-    assert f"t:rp:{tid}:10:0" in last_markup_data(), last_markup_data()
-    out = await cb(TEACHER, f"t:rp:{tid}:10:0")
+    assert f"t:rp:{tid}:10:1" in last_markup_data(), last_markup_data()
+    out = await cb(TEACHER, f"t:rp:{tid}:10:1")  # standart: to'g'ri javoblar pastda
     assert "🏆 <b>Algebra &lt;9-sinf&gt; &amp; nazorat</b> — natijalar" in out, out
     assert "Qatnashchilar" not in out and "O'rtacha" not in out and "%" not in out.split("👆")[0], out
     assert "🥇 Bobur Mirzo — <b>7.3</b>" in out and "/5" not in out, out  # ball tizimi yoqilgan: faqat ball
     assert out.index("🥇 Bobur Mirzo") < out.index("🥈 Aliyev Vali") < out.index("🥉 Ishtirokchi 23"), out  # ismi bekor qilingan
-    assert "To'g'ri javoblar:" not in out and "Natijalarim" not in out and "Nusxalash" in out, out
-    assert f"t:rp:{tid}:10:1" in last_markup_data() and f"t:rp:{tid}:0:0" not in last_markup_data()  # 3 kishi < 10
-    out = await cb(TEACHER, f"t:rp:{tid}:10:1")
     assert "🔑 <b>To'g'ri javoblar:</b>" in out and "1A  2B  3C  4D  5A" in out, out
-    assert f"t:rp:{tid}:10:0" in last_markup_data(), "kalitni olib tashlash tugmasi yo'q"
+    post_text = out.split("----")[0]
+    assert post_text.rstrip().endswith("</code>"), "to'g'ri javoblar postning eng pastida bo'lishi kerak"
+    assert "Natijalarim" not in out and "Nusxalash" in out, out
+    assert f"t:rp:{tid}:10:0" in last_markup_data() and f"t:rp:{tid}:0:1" not in last_markup_data()  # 3 kishi < 10
+    out = await cb(TEACHER, f"t:rp:{tid}:10:0")  # javoblarni olib tashlash
+    assert "To'g'ri javoblar:" not in out and f"t:rp:{tid}:10:1" in last_markup_data(), out
     post = [m for m in session.calls if type(m).__name__ == "SendMessage" and "natijalar" in (m.text or "")][-1]
     assert post.reply_markup is None, "postda tugma bo'lmasligi kerak"
     for data in (f"t:rp:{tid}:10:0", f"t:rp:{tid}:0:1"):  # begona odam
@@ -1137,7 +1137,7 @@ async def scenario():
         await cb(77, data)
         assert "SendMessage" not in names(start), names(start)
     out = await cb(TEACHER, f"t:res:{tid}")
-    assert f"t:rp:{tid}:10:0" in last_markup_data(), last_markup_data()
+    assert f"t:rp:{tid}:10:1" in last_markup_data(), last_markup_data()
 
     # --- muddatli test + avtomatik yakunlash
     await msg(TEACHER, kb.BTN_CREATE)

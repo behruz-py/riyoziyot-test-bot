@@ -271,7 +271,7 @@ async def finish_and_notify(bot: Bot, test_id: int, auto: bool = False) -> bool:
     try:
         head = "⏰ Muddat tugadi — test avtomatik yakunlandi." if auto else "🏁 Test yakunlandi."
         post_kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="📣 Natijalarni e'lon qilish uchun post", callback_data=f"t:rp:{test_id}:10:0"),
+            InlineKeyboardButton(text="📣 Natijalarni e'lon qilish uchun post", callback_data=f"t:rp:{test_id}:10:1"),
         ]]) if subs else None
         await send_long(bot, test["owner_id"], [head, ""] + ranking_lines(test, subs[:30], len(subs)),
                         reply_markup=post_kb)

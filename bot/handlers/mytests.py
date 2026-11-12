@@ -109,7 +109,7 @@ async def _view(test):
         buttons.append(InlineKeyboardButton(text="✏️ Kalitni tahrirlash", callback_data=f"t:ed:{tid}"))
     buttons.append(InlineKeyboardButton(text="📣 Post (ulashish)", callback_data=f"t:post:{tid}"))
     if participants:
-        buttons.append(InlineKeyboardButton(text="🏆 Natijalar posti", callback_data=f"t:rp:{tid}:10:0"))
+        buttons.append(InlineKeyboardButton(text="🏆 Natijalar posti", callback_data=f"t:rp:{tid}:10:1"))
     for k in range(0, len(buttons), 2):
         kb.row(*buttons[k:k + 2])
     if active:
@@ -153,7 +153,7 @@ async def test_results(callback: CallbackQuery, user) -> None:
     if features.on("excel"):
         lines += ["", "<i>📥 To'liq ro'yxat va har bir savol tahlili — Excel hisobotda.</i>"]
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="📣 Natijalarni e'lon qilish uchun post", callback_data=f"t:rp:{test['id']}:10:0"),
+        InlineKeyboardButton(text="📣 Natijalarni e'lon qilish uchun post", callback_data=f"t:rp:{test['id']}:10:1"),
     ]])
     await services.send_long(callback.bot, user["id"], lines, reply_markup=kb)
 
@@ -192,9 +192,9 @@ async def results_post_cb(callback: CallbackQuery, user) -> None:
         await callback.answer("Hozircha hech kim javob yubormagan — e'lon qiladigan natija yo'q.", show_alert=True)
         return
     finished = not services.is_open(test)
-    if with_key and not finished:
-        await callback.answer("To'g'ri javoblarni faqat test yakunlangach qo'shish mumkin.", show_alert=True)
-        return
+    # Test davom etayotganda to'g'ri javoblar postga hech qachon qo'shilmaydi (tarqalib ketmasligi uchun)
+    with_key = with_key and finished
+    key = "1" if with_key else "0"
     await callback.answer()
     await callback.bot.send_message(user["id"], results_post(test, subs, top, with_key))
     kb = InlineKeyboardBuilder()
@@ -207,8 +207,8 @@ async def results_post_cb(callback: CallbackQuery, user) -> None:
                                     callback_data=f"t:rp:{tid}:{top}:{0 if with_key else 1}"))
     kb.row(InlineKeyboardButton(text="⬅️ Testga qaytish", callback_data=f"t:v:{tid}"), home_btn())
     note = "" if finished else (
-        "\n\n<i>Test hali yakunlanmagan — bu joriy natijalar. To'g'ri javoblarni test yakunlangach "
-        "qo'shish mumkin bo'ladi.</i>"
+        "\n\n<i>Test hali yakunlanmagan — bu joriy natijalar. To'g'ri javoblar test yakunlangach "
+        "postning pastiga avtomatik qo'shiladi.</i>"
     )
     await callback.bot.send_message(
         user["id"],
