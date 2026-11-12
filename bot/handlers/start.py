@@ -54,9 +54,6 @@ HELP_TEXT = (
     "3. Ball tizimi va muddat (ixtiyoriy)\n"
     "4. Bot bergan <b>test kodini</b> o'quvchilarga tarqating\n\n"
     "Natijalar, Excel hisobot va testni yakunlash — «📚 Mening testlarim» bo'limida.\n\n"
-    "<b>✍️ Ochiq (yozma) javobli savollar</b>\n"
-    "Har bir javob yangi qatordan yoziladi:\n"
-    "<code>1. A\n2. 12.5\n3. x=2</code>\n\n"
     "<b>🧭 Adashib qolsangiz</b>\n"
     "«❌ Bekor qilish» yoki /start — istalgan joydan asosiy menyuga qaytaradi."
 )

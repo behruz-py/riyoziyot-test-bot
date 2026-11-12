@@ -99,7 +99,7 @@ async def _ask(bot: Bot, user_id: int, state: FSMContext, test, kind: str) -> No
             "🎯 <b>Ayrim savollarni tuzatish</b>\n\n"
             "Har bir tuzatishni <b>savol raqami va yangi to'g'ri javob</b> ko'rinishida yuboring. "
             "Bir nechta bo'lsa — har birini yangi qatordan:\n"
-            "<code>5 B\n12 D\n17 12.5</code>\n\n"
+            "<code>5 B\n12 D\n17 A</code>\n\n"
             f"<i>Testda {n} ta savol bor. Ko'rsatilmagan savollar o'zgarmaydi, ballar saqlanadi.</i>"
         )
         markup = _back_kb(tid)
@@ -107,7 +107,7 @@ async def _ask(bot: Bot, user_id: int, state: FSMContext, test, kind: str) -> No
         text = (
             "🔁 <b>Butun kalitni qayta kiritish</b>\n\n"
             f"Barcha <b>{n} ta</b> savolning to'g'ri javobini test yaratishdagi kabi yuboring:\n"
-            "<code>1A2B3C4D…</code> yoki ochiq savollar bo'lsa, har birini yangi qatordan.\n\n"
+            "<code>1A2B3C4D…</code> yoki <code>ABCD…</code>\n\n"
             "<i>Savollar soni o'zgarmasligi kerak — ishtirokchilar javoblari shu savollarga bog'langan. "
             "Ballar saqlanadi.</i>"
         )

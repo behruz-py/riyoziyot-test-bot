@@ -134,6 +134,17 @@ def restart():
     dp = build_dispatcher()
 
 
+def last_post_url() -> str | None:
+    """Oxirgi yuborilgan URL tugmali xabardagi havola."""
+    for m in reversed(session.calls):
+        rm = getattr(m, "reply_markup", None)
+        if rm is not None and hasattr(rm, "inline_keyboard"):
+            urls = [b.url for row in rm.inline_keyboard for b in row if b.url]
+            if urls:
+                return urls[0]
+    return None
+
+
 def last_markup_data() -> list[str]:
     """Oxirgi yuborilgan inline klaviaturadagi callback_data lar."""
     for m in reversed(session.calls):
@@ -470,12 +481,14 @@ async def scenario():
     assert "2-qadam" in out, out
     out = await msg(TEACHER, "1a2b4c")
     assert "ketma-ket emas" in out
-    out = await msg(TEACHER, "1. a\n2. b\n3. 0.5|1/2\n4. d\n5. Toshkent")
-    assert "5 ta savol" in out and "variantli: 3, ochiq: 2" in out and "3-qadam" in out, out
+    out = await msg(TEACHER, "1. a\n2. b\n3. 0.5\n4. d\n5. Toshkent")  # ochiq javob endi yo'q
+    assert "3-savolning javobi «0.5» — tushunarsiz" in out and "A, B, C yoki D" in out, out
+    out = await msg(TEACHER, "1. a\n2. b\n3. c\n4. d\n5. a")
+    assert "5 ta savol" in out and "ochiq" not in out and "3-qadam" in out and "1A  2B  3C  4D  5A" in out, out
     out = await cb(TEACHER, "cr:p:custom")
     assert "savollar: ball" in out
     out = await msg(TEACHER, kb.BTN_BACK)  # ballardan kalitga qaytish - kalit saqlangan
-    assert "Kalit qabul qilindi" in out and "Toshkent" in out, out
+    assert "Kalit qabul qilindi" in out and "5A" in out, out
     await cb(TEACHER, "cr:p:custom")
     out = await msg(TEACHER, "1-9: 2")
     assert "noto'g'ri" in out
@@ -493,11 +506,15 @@ async def scenario():
     out = await cb(TEACHER, "cr:d:0")
     assert "Hammasi to'g'rimi" in out and "jami 7.3" in out, out
     out = await cb(TEACHER, "cr:ok")
-    assert "Test yaratildi" in out and "start=test_" in out, out
+    assert "Test yaratildi" in out and "O'quvchilar uchun tayyor post" in out, out
     tests = await db.tests_by_owner(TEACHER, 10, 0)
     assert len(tests) == 1
     test = tests[0]
     code, tid = test["code"], test["id"]
+    assert f"Test kodi: <code>{code}</code>" in out and "Savollar soni: <b>5 ta</b>" in out, out
+    assert "Muallif: Ustoz Karimov" in out and "@test_bot" in out, out
+    assert last_post_url() == f"https://t.me/test_bot?start=test_{code}", last_post_url()
+    assert f"t:note:{tid}" in last_markup_data() and "go:create" in last_markup_data()
 
     # --- muallif o'z testiga javob yubora olmaydi
     out = await msg(TEACHER, f"{code}*abcda")
@@ -511,7 +528,7 @@ async def scenario():
     out = await msg(S1, "99")
     assert "topilmadi" in out
     out = await msg(S1, code)
-    assert "Ochiq (yozma) javobli savollar: <b>3, 5</b>" in out, out
+    assert "<code>1A2B3C4D…</code>" in out and "Ochiq" not in out, out
     out = await msg(S1, kb.BTN_BACK)  # javoblardan kod so'rashga qaytish
     assert "test kodini" in out, out
     await msg(S1, code)
@@ -519,14 +536,14 @@ async def scenario():
     assert "5</b> ta savol bor" in out, out
     out = await msg(S1, "1. a\n2. zzz\n3. 1\n4. d\n5. x")
     assert "variantli" in out, out
-    out = await msg(S1, "1. a\n2. a\n3. 2/4\n4. -\n5. toshkent")
+    out = await msg(S1, "1. a\n2. a\n3. c\n4. -\n5. a")
     assert "Javoblaringizni tekshiring" in out and "Javobsiz qoldirilgan savollar: <b>1</b>" in out, out
     assert await db.get_submission(tid, S1) is None, "tasdiqlanmasdan saqlandi"
     out = await photo(S1)
     assert "«✅ Yuborish»" in out, out
     out = await cb(S1, "sv:edit")
     assert "Javoblaringizni bitta xabarda" in out, out
-    out = await msg(S1, "1. a\n2. c\n3. 2/4\n4. -\n5. toshkent")
+    out = await msg(S1, "1. a\n2. c\n3. C\n4. -\n5. A")
     assert "Javoblaringizni tekshiring" in out, out
     restart()  # tasdiqlash oldidan server qayta ishga tushdi
     out = await cb(S1, "sv:ok")
@@ -535,7 +552,7 @@ async def scenario():
     assert "siz: <code>C</code>" in out, out
     assert "to'g'ri: <code>" not in out, "kalit test tugamasdan oshkor bo'ldi"
     # qayta yuborish
-    out = await msg(S1, f"{code}*1. a\n2. b\n3. 0.5\n4. d\n5. toshkent")
+    out = await msg(S1, f"{code}*1. a\n2. b\n3. c\n4. d\n5. a")
     assert "avval javob yuborgansiz" in out, out
     out = await msg(S1, code)  # holatsiz yuborilgan raqam - test kodi
     assert "avval javob yuborgansiz" in out, out
@@ -543,13 +560,13 @@ async def scenario():
     assert "eski xabarga tegishli" in out and "menyudan davom eting" in out, out
 
     # --- S2: tezkor format, hammasi to'g'ri; deep link orqali S3
-    out = await msg(S2, f"{code}*a;b;0,5;d;TOSHKENT")
+    out = await msg(S2, f"{code}*a;b;c;d;A")
     assert "Javoblaringizni tekshiring" in out, out
     out = await cb(S2, "sv:ok")
     assert "Barcha javoblaringiz to'g'ri" in out and "7.3 / 7.3" in out and "1 / 2" in out, out
     out = await msg(S3, f"/start test_{code}")
     assert "Savollar soni" in out, out
-    await msg(S3, "1. b\n2. b\n3. 7\n4. d\n5. -")
+    await msg(S3, "1. b\n2. b\n3. a\n4. d\n5. -")
     out = await cb(S3, "sv:ok")
     assert "2 / 5" in out and "3 / 3" in out, out  # 1.1 + 1 = 2.1 ball, 3-o'rin
     start = len(session.calls)
@@ -631,9 +648,34 @@ async def scenario():
     await cb(TEACHER, f"t:xl:{tid}")
     assert "SendDocument" in names(start)
     out = await cb(TEACHER, f"t:key:{tid}")
-    assert "Toshkent" in out and "Ballar" in out, out
-    out = await cb(TEACHER, f"t:share:{tid}")
-    assert code in out
+    assert "5A" in out and "Ballar" in out, out
+    out = await cb(TEACHER, f"t:share:{tid}")  # eski tugma ham ishlaydi
+    assert f"<code>{code}</code>" in out and "tayyor post" in out, out
+
+    # --- post va muallif izohi
+    assert f"t:post:{tid}" in (await cb(TEACHER, f"t:v:{tid}") and last_markup_data())
+    out = await cb(TEACHER, f"t:post:{tid}")
+    assert "Algebra &lt;9-sinf&gt; &amp; nazorat" in out and "Izoh qo'shish" not in out, out
+    assert f"t:notedel:{tid}" not in last_markup_data()
+    for data in (f"t:post:{tid}", f"t:note:{tid}", f"t:notedel:{tid}"):  # begona odam
+        start = len(session.calls)
+        await cb(77, data)
+        assert "SendMessage" not in names(start), (data, names(start))
+    out = await cb(TEACHER, f"t:note:{tid}")
+    assert "Postga izoh" in out and "Hozirgi izoh" not in out, out
+    for wrong, error in (("x", "juda qisqa"), ("a" * 501, "juda uzun"), ("Blyat sinf", "nomaqbul")):
+        out = await msg(TEACHER, wrong)
+        assert error in out, (wrong, out)
+    out = await msg(TEACHER, "  9-B   sinf <b>omad</b>!\n\n\n\nSoat 18:00 gacha  ")
+    assert "Izoh saqlandi" in out and "9-B sinf &lt;b&gt;omad&lt;/b&gt;!\n\nSoat 18:00 gacha" in out, out
+    assert (await db.get_test(tid))["note"] == "9-B sinf <b>omad</b>!\n\nSoat 18:00 gacha"
+    assert f"t:notedel:{tid}" in last_markup_data()
+    out = await cb(TEACHER, f"t:note:{tid}")
+    assert "Hozirgi izoh" in out, out
+    out = await msg(TEACHER, kb.BTN_CANCEL)
+    assert (await db.get_test(tid))["note"], "bekor qilish izohni o'chirib yubordi"
+    out = await cb(TEACHER, f"t:notedel:{tid}")
+    assert "omad" not in out and (await db.get_test(tid))["note"] is None, out
 
     # --- kalitni tahrirlash va qayta hisoblash
     original_questions = (await db.get_test(tid))["questions"]
@@ -688,7 +730,7 @@ async def scenario():
     await cb(TEACHER, f"t:edk:full:{tid}")
     out = await msg(TEACHER, "ABCD")
     assert "<b>5</b> ta savol bor" in out and "sonini o'zgartirib bo'lmaydi" in out, out
-    out = await msg(TEACHER, "1. A\n2. B\n3. 0.5|1/2\n4. D\n5. Toshkent")
+    out = await msg(TEACHER, "1. A\n2. B\n3. C\n4. D\n5. A")
     assert "2) <code>C</code> → <b><code>B</code></b>" in out, out
     await cb(TEACHER, "ked:save")
     await cb(TEACHER, f"t:edk:points:{tid}")
@@ -855,7 +897,7 @@ async def scenario():
     await msg(TEACHER, kb.BTN_CREATE)
     await msg(TEACHER, "Tezkor test")
     out = await msg(TEACHER, "abcd")
-    assert "variantli: 4, ochiq: 0" in out
+    assert "4 ta savol" in out, out
     await cb(TEACHER, "cr:p:std")
     out = await cb(TEACHER, "cr:d:60")
     assert "gacha" in out

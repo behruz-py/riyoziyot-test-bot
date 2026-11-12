@@ -11,8 +11,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import db, keyparser as kp, services
 from ..config import ADMIN_IDS, is_admin
-from ..keyboards import BTN_MY_TESTS, NO_PREVIEW, flow_kb, home_btn, main_menu, pager
-from .create import share_text
+from ..keyboards import BTN_MY_TESTS, flow_kb, home_btn, main_menu, pager
+from .create import send_post
 
 router = Router(name="mytests")
 router.message.filter(F.chat.type == "private")
@@ -75,14 +75,13 @@ async def _owned_test(callback: CallbackQuery, user):
 
 async def _view(test):
     questions = services.questions_of(test)
-    closed = sum(1 for q in questions if q["t"] == "c")
     participants = await db.count_submissions(test["id"])
     active = services.is_open(test)
     status = "🟢 Faol" if active else f"🔴 Yakunlangan ({services.to_local(test['finished_at'] or test['deadline'])})"
     text = (
         f"📋 <b>{escape(test['title'])}</b>\n\n"
         f"🔢 Kod: <code>{test['code']}</code>\n"
-        f"❓ Savollar: <b>{len(questions)}</b> ta (variantli: {closed}, ochiq: {len(questions) - closed})\n"
+        f"❓ Savollar: <b>{len(questions)}</b> ta\n"
         f"💯 Ball: {services.points_summary(questions)}\n"
         f"👥 Ishtirokchilar: <b>{participants}</b> nafar\n"
         f"📅 Yaratilgan: {services.to_local(test['created_at'])}\n"
@@ -97,7 +96,7 @@ async def _view(test):
     kb.row(InlineKeyboardButton(text="👥 Ishtirokchilar", callback_data=f"t:pl:{tid}:0"),
            InlineKeyboardButton(text="🔑 Kalit", callback_data=f"t:key:{tid}"))
     kb.row(InlineKeyboardButton(text="✏️ Kalitni tahrirlash", callback_data=f"t:ed:{tid}"),
-           InlineKeyboardButton(text="🔗 Ulashish", callback_data=f"t:share:{tid}"))
+           InlineKeyboardButton(text="📣 Post (ulashish)", callback_data=f"t:post:{tid}"))
     if active:
         kb.row(InlineKeyboardButton(text="🏁 Testni yakunlash", callback_data=f"t:fin:{tid}"))
     kb.row(InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"t:del:{tid}"),
@@ -178,8 +177,7 @@ async def test_share(callback: CallbackQuery, user) -> None:
     if test is None:
         return
     await callback.answer()
-    me = await callback.bot.me()
-    await callback.bot.send_message(user["id"], share_text(test, me.username), link_preview_options=NO_PREVIEW)
+    await send_post(callback.bot, user["id"], test)
 
 
 def _confirm_kb(action: str, test_id: int):
@@ -421,6 +419,7 @@ STATE_HINTS = {
     "KeyEdit:full": "barcha savollarning to'g'ri javobini yuboring (masalan: <code>1A2B3C4D</code>)",
     "KeyEdit:points": "ballarni yuboring (masalan: <code>1-10: 1.1; 11-20: 2.1</code>)",
     "KeyEdit:confirm": "yuqoridagi <b>«✅ Saqlash»</b> yoki <b>«❌ Bekor qilish»</b> tugmasini bosing",
+    "PostNote:text": "postga qo'shiladigan izohni <b>matn</b> ko'rinishida yuboring",
     "Admin:addadmin": "yangi adminning ID raqamini yuboring yoki uning xabarini forward qiling",
 }
 

@@ -55,11 +55,18 @@ def main():
     assert raises(kp.parse_answers, "x" * 100 + "\n1")
 
     # Kalit tuzish
-    qs = kp.build_questions(kp.parse_answers("1. a\n2. 0.5|1/2\n3. Toshkent"))
-    assert [q["t"] for q in qs] == ["c", "o", "o"]
+    # Kalitda faqat A-D: ochiq (yozma) javob qabul qilinmaydi
+    for bad in ("1. a\n2. 0.5|1/2\n3. Toshkent", "1. a\n2. 12", "ABCDX", "1A2B3X"):
+        try:
+            kp.build_questions(kp.parse_answers(bad))
+            raise AssertionError(f"ochiq javob kalitga qabul qilindi: {bad!r}")
+        except kp.ParseError as e:
+            assert "A, B, C yoki D" in str(e) or "faqat" in str(e), (bad, str(e))
+    qs = kp.build_questions(kp.parse_answers("1. a\n2. B\n3. c"))
+    assert [q["t"] for q in qs] == ["c", "c", "c"]
     assert raises(kp.build_questions, ["a", "-"])
 
-    # Ochiq javoblarni solishtirish
+    # Ochiq javoblarni solishtirish (faqat avvalgi versiyada yaratilgan eski testlar uchun saqlangan)
     assert kp.open_equal("0,50", "0.5")
     assert kp.open_equal("1/2", "0.5")
     assert kp.open_equal("2/4", "0.5|3")
@@ -81,7 +88,9 @@ def main():
     assert raises(kp.parse_points, "1: 0", 4)
 
     # Tekshirish va baholash
-    qs = kp.build_questions(kp.parse_answers("1. a\n2. b\n3. 12.5\n4. d"))
+    # Eski (ochiq savolli) test ham to'g'ri baholanadi
+    qs = [{"t": "c", "a": "a", "p": 1.0}, {"t": "c", "a": "b", "p": 1.0}, {"t": "o", "a": "12.5", "p": 1.0},
+          {"t": "c", "a": "d", "p": 1.0}]
     for q, p in zip(qs, [1, 2, 3.5, 1]):
         q["p"] = p
     ans = kp.parse_answers("1. a\n2. c\n3. 12,50\n4. -")
@@ -95,21 +104,21 @@ def main():
 
     # Ayrim savollarni tuzatish
     assert kp.parse_corrections("5 B", 10) == {5: "b"}
-    assert kp.parse_corrections("5. b\n12 D\n7 = 12.5", 20) == {5: "b", 12: "d", 7: "12.5"}
-    assert kp.parse_corrections("5B; 6) c; 7: -3", 10) == {5: "b", 6: "c", 7: "-3"}
-    assert kp.parse_corrections("3 0.5|1/2", 5) == {3: "0.5|1/2"}
+    assert kp.parse_corrections("5. b\n12 D\n7 = A", 20) == {5: "b", 12: "d", 7: "a"}
+    assert kp.parse_corrections("5B; 6) c; 7: D", 10) == {5: "b", 6: "c", 7: "d"}
     assert kp.parse_corrections("2 В", 5) == {2: "b"}  # kirill В
     for bad, error in (("11 B", "11-savol yo'q"), ("0 A", "0-savol yo'q"), ("2 E", "faqat"), ("2 -", "ko'rsatilmagan"),
-                       ("2 A\n2 B", "ikki marta"), ("B", "tushunmadim"), ("", "bo'sh")):
+                       ("2 A\n2 B", "ikki marta"), ("B", "tushunmadim"), ("", "bo'sh"),
+                       ("7 12.5", "A, B, C yoki D"), ("3 0.5|1/2", "A, B, C yoki D")):
         try:
             kp.parse_corrections(bad, 10)
             raise AssertionError(f"qabul qilindi: {bad!r}")
         except kp.ParseError as e:
             assert error in str(e), (bad, str(e))
-    qs = kp.build_questions(["a", "12", "c"])
+    qs = kp.build_questions(["a", "b", "c"])
     qs[1]["p"] = 2.5
-    new = kp.apply_answers(qs, {1: "d", 2: "b", 3: "x=2"})
-    assert [(q["t"], q["a"], q["p"]) for q in new] == [("c", "d", 1.0), ("c", "b", 2.5), ("o", "x=2", 1.0)]
+    new = kp.apply_answers(qs, {1: "d", 3: "a"})
+    assert [(q["t"], q["a"], q["p"]) for q in new] == [("c", "d", 1.0), ("c", "b", 2.5), ("c", "a", 1.0)]
     assert qs[0]["a"] == "a", "asl ro'yxat o'zgarib qoldi"
 
     assert kp.fmt_num(4.5) == "4.5" and kp.fmt_num(3.0) == "3" and kp.fmt_num(0) == "0"

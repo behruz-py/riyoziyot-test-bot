@@ -12,12 +12,19 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import db, keyparser as kp, moderation, services
 from ..config import MAX_TITLE_LEN, is_admin
-from ..keyboards import BTN_BACK, BTN_CREATE, NO_PREVIEW, flow_kb, home_btn, main_menu
+from ..keyboards import BTN_BACK, BTN_CREATE, NO_PREVIEW, cancel_kb, flow_kb, home_btn, main_menu
 
 router = Router(name="create")
 router.message.filter(F.chat.type == "private")
 
 MAX_TESTS_PER_USER = 100
+
+
+MAX_NOTE_LEN = 500
+
+
+class PostNote(StatesGroup):
+    text = State()
 
 
 class Create(StatesGroup):
@@ -30,16 +37,12 @@ class Create(StatesGroup):
 
 KEY_HELP = (
     "🔑 <b>2-qadam (4 tadan): javoblar kaliti</b>\n\n"
-    "Testning <b>to'g'ri javoblarini</b> bitta xabarda yuboring.\n\n"
-    "<b>Variantli (A, B, C, D) savollar:</b>\n"
-    "<code>1A2B3C4D…</code> yoki <code>ABCDABCD…</code>\n\n"
-    "<b>Ochiq (yozma) javobli savollar ham bo'lsa</b> — har bir javob yangi qatordan:\n"
-    "<code>1. A\n2. C\n3. 12.5\n4. x=2</code>\n\n"
-    "<i>• Bitta harf (A–D) — variantli savol, boshqa qiymat — ochiq javob deb olinadi\n"
-    "• Katta yoki kichik harf bilan yozish farq qilmaydi\n"
-    "• Ochiq savolda bir nechta to'g'ri javob: </i><code>0.5|1/2</code>\n"
-    "<i>• Ochiq javoblarda katta-kichik harf va bo'shliq farq qilmaydi, sonlar qiymati bo'yicha "
-    "solishtiriladi (0,5 = 0.50 = 1/2)</i>"
+    "Testning <b>to'g'ri javoblarini</b> bitta xabarda yuboring — har bir savol uchun bitta harf: "
+    "<b>A, B, C yoki D</b>.\n\n"
+    "Namuna:\n<code>1A2B3C4D5A…</code>  yoki  <code>ABCDA…</code>\n\n"
+    "<i>• Katta yoki kichik harf bilan yozish farq qilmaydi\n"
+    "• Bo'shliq va yangi qatorlar ham mumkin: </i><code>1A 2B 3C</code>\n"
+    "<i>• Savollar ko'p bo'lsa, xabarni bo'laklab emas, bittada yuboring (200 tagacha)</i>"
 )
 
 DEADLINE_KB = InlineKeyboardMarkup(inline_keyboard=[
@@ -91,10 +94,8 @@ async def _show_key_step(bot: Bot, user_id: int, state: FSMContext) -> None:
     if not questions:
         await bot.send_message(user_id, KEY_HELP, reply_markup=flow_kb(placeholder="Javoblar kaliti"))
         return
-    closed = sum(1 for q in questions if q["t"] == "c")
     lines = [
-        f"✅ <b>Kalit qabul qilindi:</b> {len(questions)} ta savol "
-        f"(variantli: {closed}, ochiq: {len(questions) - closed})",
+        f"✅ <b>Kalit qabul qilindi:</b> {len(questions)} ta savol",
         "",
         *services.key_preview(questions),
         "",
@@ -139,7 +140,6 @@ async def _ask_confirm(bot: Bot, user_id: int, state: FSMContext, deadline: str 
     await state.set_state(Create.confirm)
     data = await state.get_data()
     questions = data["questions"]
-    closed = sum(1 for q in questions if q["t"] == "c")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Testni yaratish", callback_data="cr:ok")],
         [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="cr:back"),
@@ -149,7 +149,7 @@ async def _ask_confirm(bot: Bot, user_id: int, state: FSMContext, deadline: str 
         user_id,
         "🔎 <b>Hammasi to'g'rimi?</b>\n\n"
         f"📋 Nomi: <b>{escape(data['title'])}</b>\n"
-        f"❓ Savollar: <b>{len(questions)}</b> ta (variantli: {closed}, ochiq: {len(questions) - closed})\n"
+        f"❓ Savollar: <b>{len(questions)}</b> ta\n"
         f"💯 Ball: {services.points_summary(questions)}\n"
         f"⏰ Muddat: <b>{services.to_local(deadline) + ' gacha' if deadline else 'belgilanmagan'}</b>\n\n"
         "To'g'ri bo'lsa, <b>«✅ Testni yaratish»</b>ni bosing.",
@@ -305,16 +305,141 @@ async def create_cancel(callback: CallbackQuery, state: FSMContext, user) -> Non
     await send_menu(callback.bot, user["id"])
 
 
-def share_text(test, bot_username: str) -> str:
-    """O'quvchilarga tarqatish uchun tayyor matn."""
+# ---------------------------------------------------------------- o'quvchilar uchun tayyor post
+async def build_post(bot: Bot, test) -> tuple[str, InlineKeyboardMarkup]:
+    """Forward qilinadigan post: test haqida ma'lumot va «Javoblarni yuborish» tugmasi."""
     questions = services.questions_of(test)
-    deadline = f"\n⏰ Muddat: {services.to_local(test['deadline'])} gacha" if test["deadline"] else ""
-    return (
-        f"📋 <b>{escape(test['title'])}</b>\n"
-        f"❓ Savollar soni: {len(questions)} ta{deadline}\n\n"
-        f"🔢 Test kodi: <code>{test['code']}</code>\n\n"
-        f"Javoblarni yuborish 👉 https://t.me/{bot_username}?start=test_{test['code']}"
+    owner = await db.get_user(test["owner_id"])
+    me = await bot.me()
+    link = f"https://t.me/{me.username}?start=test_{test['code']}"
+    lines = [f"📝 <b>{escape(test['title'])}</b>", ""]
+    if test["note"]:
+        lines += [escape(test["note"]), ""]
+    lines.append(f"❓ Savollar soni: <b>{len(questions)} ta</b>")
+    lines.append(f"💯 Ball: {services.points_summary(questions)}")
+    if test["deadline"]:
+        lines.append(f"⏰ Javoblar qabul qilinadi: <b>{services.to_local(test['deadline'])}</b> gacha")
+    if owner and owner["full_name"]:
+        lines.append(f"👨‍🏫 Muallif: {escape(owner['full_name'])}")
+    lines += [
+        "",
+        f"🔢 Test kodi: <code>{test['code']}</code>",
+        "",
+        "📲 <b>Qanday qatnashiladi?</b>",
+        f"Pastdagi tugmani bosing yoki @{me.username} ga test kodini yuboring. "
+        "Javoblar namunasi: <code>1A2B3C4D…</code>",
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Javoblarni yuborish", url=link)]])
+    return "\n".join(lines), kb
+
+
+async def send_post(bot: Bot, user_id: int, test, created: bool = False) -> None:
+    """Postni va uning ostida muallif uchun boshqaruv tugmalarini yuboradi."""
+    text, kb = await build_post(bot, test)
+    await bot.send_message(user_id, text, reply_markup=kb, link_preview_options=NO_PREVIEW)
+    tid = test["id"]
+    controls = InlineKeyboardBuilder()
+    controls.row(InlineKeyboardButton(text="✍️ Izohni o'zgartirish" if test["note"] else "✍️ Izoh qo'shish",
+                                      callback_data=f"t:note:{tid}"))
+    if test["note"]:
+        controls.row(InlineKeyboardButton(text="🗑 Izohni olib tashlash", callback_data=f"t:notedel:{tid}"))
+    controls.row(InlineKeyboardButton(text="⚙️ Testni boshqarish", callback_data=f"t:v:{tid}"))
+    if created:
+        controls.row(InlineKeyboardButton(text="➕ Yana test yaratish", callback_data="go:create"), home_btn())
+    else:
+        controls.row(home_btn())
+    await bot.send_message(
+        user_id,
+        "👆 <b>O'quvchilar uchun tayyor post.</b>\n\n"
+        "Uni o'quvchilaringizga yoki kanal/guruhingizga <b>forward</b> qiling — «✅ Javoblarni yuborish» "
+        "tugmasi ham birga o'tadi: bosgan odamga bot darhol shu testni ochadi.\n\n"
+        "<i>Postga o'z izohingizni qo'shishingiz mumkin, masalan: «9-B sinf, 2-chorak nazorat ishi. Omad!»</i>",
+        reply_markup=controls.as_markup(),
     )
+
+
+async def _post_test(callback: CallbackQuery, user):
+    test = await db.get_test(int(callback.data.split(":")[2]))
+    if test is None:
+        await callback.answer("Test topilmadi — o'chirilgan bo'lishi mumkin.", show_alert=True)
+        return None
+    if test["owner_id"] != user["id"] and not is_admin(user["id"]):
+        await callback.answer("Bu test sizga tegishli emas.", show_alert=True)
+        return None
+    return test
+
+
+@router.callback_query(F.data.startswith("t:post:"))
+async def post_cb(callback: CallbackQuery, state: FSMContext, user) -> None:
+    test = await _post_test(callback, user)
+    if test is None:
+        return
+    await state.clear()
+    await callback.answer()
+    await send_post(callback.bot, user["id"], test)
+
+
+@router.callback_query(F.data.startswith("t:note:"))
+async def note_ask(callback: CallbackQuery, state: FSMContext, user) -> None:
+    test = await _post_test(callback, user)
+    if test is None:
+        return
+    await callback.answer()
+    await state.set_state(PostNote.text)
+    await state.set_data({"test_id": test["id"]})
+    current = f"\n\nHozirgi izoh:\n<i>{escape(test['note'])}</i>" if test["note"] else ""
+    await callback.bot.send_message(
+        user["id"],
+        "✍️ <b>Postga izoh</b>\n\n"
+        f"Postda test nomidan keyin chiqadigan matnni yuboring (ko'pi bilan {MAX_NOTE_LEN} belgi).\n"
+        "<i>Masalan: 9-B sinf o'quvchilari, 2-chorak nazorat ishi. Javoblarni soat 18:00 gacha yuboring. "
+        "Omad!</i>" + current,
+        reply_markup=cancel_kb("Izoh matni"),
+    )
+    await callback.bot.send_message(
+        user["id"], "Yoki postga qayting 👇",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⬅️ Postga qaytish", callback_data=f"t:post:{test['id']}"),
+        ]]),
+    )
+
+
+@router.message(PostNote.text, F.text)
+async def note_got(message: Message, state: FSMContext, user) -> None:
+    test = await db.get_test((await state.get_data()).get("test_id") or 0)
+    if test is None or (test["owner_id"] != user["id"] and not is_admin(user["id"])):
+        await state.clear()
+        await message.answer("❌ Test topilmadi.", reply_markup=main_menu(user["id"]))
+        return
+    note = "\n".join(" ".join(line.split()) for line in message.text.strip().splitlines()).strip()
+    while "\n\n\n" in note:
+        note = note.replace("\n\n\n", "\n\n")
+    if len(note) > MAX_NOTE_LEN:
+        await message.answer(
+            f"⚠️ Izoh juda uzun: {len(note)} belgi (ko'pi bilan {MAX_NOTE_LEN}). Qisqartirib, qaytadan yuboring 👇"
+        )
+        return
+    if len(note) < 2:
+        await message.answer("⚠️ Izoh juda qisqa. Qaytadan yuboring 👇")
+        return
+    if await moderation.is_bad(note):
+        await message.answer("⚠️ Izohda nomaqbul so'z bor. Boshqacha yozib, qaytadan yuboring 👇")
+        return
+    await db.set_note(test["id"], note)
+    await state.clear()
+    await message.answer("✅ Izoh saqlandi. Yangilangan post 👇", reply_markup=main_menu(user["id"]))
+    await send_post(message.bot, user["id"], await db.get_test(test["id"]))
+
+
+@router.callback_query(F.data.startswith("t:notedel:"))
+async def note_delete(callback: CallbackQuery, state: FSMContext, user) -> None:
+    test = await _post_test(callback, user)
+    if test is None:
+        return
+    await state.clear()
+    await db.set_note(test["id"], None)
+    await callback.answer("Izoh olib tashlandi.")
+    await send_post(callback.bot, user["id"], await db.get_test(test["id"]))
 
 
 @router.callback_query(Create.confirm, F.data == "cr:ok")
@@ -333,19 +458,13 @@ async def create_ok(callback: CallbackQuery, state: FSMContext, user) -> None:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    me = await callback.bot.me()
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="⚙️ Testni boshqarish", callback_data=f"t:v:{test['id']}"))
-    kb.row(InlineKeyboardButton(text="➕ Yana test yaratish", callback_data="go:create"), home_btn())
     await callback.bot.send_message(
         user["id"],
         f"🎉 <b>Test yaratildi!</b>\n\n🔢 Test kodi: <code>{test['code']}</code>\n\n"
         "<b>Endi nima qilinadi?</b>\n"
-        "1. Pastdagi xabarni o'quvchilarga yoki kanalingizga yuboring\n"
+        "1. Pastdagi postni o'quvchilarga yoki kanalingizga forward qiling\n"
         "2. Natijalarni «📚 Mening testlarim» bo'limida kuzating\n"
         + ("3. Muddat tugagach test o'zi yakunlanadi" if deadline else "3. Tugatmoqchi bo'lganingizda testni yakunlang"),
         reply_markup=main_menu(user["id"]),
     )
-    await callback.bot.send_message(
-        user["id"], share_text(test, me.username), reply_markup=kb.as_markup(), link_preview_options=NO_PREVIEW
-    )
+    await send_post(callback.bot, user["id"], test, created=True)

@@ -92,6 +92,7 @@ _NEW_COLUMNS = [
     ("submissions", "is_hidden", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "last_seen", "TEXT"),
     ("tests", "edited_at", "TEXT"),
+    ("tests", "note", "TEXT"),
 ]
 _SQLITE_TYPES = {"PK": "INTEGER PRIMARY KEY AUTOINCREMENT", "BIG": "INTEGER", "REAL": "REAL"}
 _PG_TYPES = {"PK": "BIGSERIAL PRIMARY KEY", "BIG": "BIGINT", "REAL": "DOUBLE PRECISION"}
@@ -453,6 +454,10 @@ async def add_submission(
 
 async def get_submission(test_id: int, user_id: int):
     return await _one("SELECT * FROM submissions WHERE test_id=? AND user_id=?", (test_id, user_id))
+
+
+async def set_note(test_id: int, note: str | None) -> None:
+    await _exec("UPDATE tests SET note=? WHERE id=?", (note or None, test_id))
 
 
 async def submissions_all(test_id: int) -> list:

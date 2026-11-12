@@ -5,7 +5,7 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 ## Imkoniyatlar
 
 - **Test yaratish** (har qanday foydalanuvchi): nom → javoblar kaliti → ball tizimi → muddat (ixtiyoriy).
-  - Variantli (A, B, C, D) va ochiq (yozma) javobli savollar; ochiq javobda bir nechta to'g'ri variant (`0.5|1/2`).
+  - Har bir savol variantli: A, B, C yoki D (katta-kichik harf farq qilmaydi).
   - Har bir savol 1 ball yoki savollarga alohida ball (`1-10: 1.1; 11-20: 2.1`).
   - Muddatsiz yoki muddatli; muddat tugagach test avtomatik yakunlanadi.
 - **Javobni tekshirish**: kod → javoblar, yoki tezkor `12345*1A2B3C...`, yoki havola orqali (`t.me/bot?start=test_12345`).
@@ -14,6 +14,7 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 - **Reyting**: ball bo'yicha, teng bo'lsa — oldin topshirgan yuqorida. Faqat ishtirokchi, muallif va adminlar ko'radi.
 - **Sertifikat** (PNG): ism, ball, foiz, yakunlangan testda — egallagan o'rin.
 - **Muallif paneli**: natijalar, Excel hisobot (reyting + har bir savol tahlili), kalit, ulashish, yakunlash, o'chirish.
+- **Tayyor post**: test yaratilgach muallifga o'quvchilarga forward qilinadigan post beriladi (test ma'lumoti va «✅ Javoblarni yuborish» tugmasi). Muallif unga o'z izohini qo'sha oladi.
 - **Kalitni tahrirlash**: ayrim savollarni tuzatish (`5 B`), butun kalitni qayta kiritish yoki ballarni o'zgartirish. Saqlashdan oldin o'zgarishlar va nechta ishtirokchining bali o'zgarishi ko'rsatiladi; barcha natijalar, reyting va sertifikatlar avtomatik qayta hisoblanadi, ishtirokchilarga xabar yuborish ixtiyoriy.
 - **Majburiy obuna**: bir yoki bir nechta kanal, admin paneldan boshqariladi.
 - **Admin panel**: kengaytirilgan statistika (umumiy, 7 kunlik dinamika, eng faollar, foydalanuvchilar ro'yxati Excel'da), barchaga xabar tarqatish, kanallar, foydalanuvchini bloklash.

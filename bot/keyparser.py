@@ -1,19 +1,14 @@
 """Javoblar kalitini va o'quvchi javoblarini o'qish hamda tekshirish.
 
-Qo'llab-quvvatlanadigan formatlar:
+Har bir savol variantli: javob - A, B, C yoki D (katta-kichik harf farq qilmaydi).
+Qo'llab-quvvatlanadigan yozuv shakllari:
   1) Ixcham:        ABCDABCD            (har bir harf - bitta savol)
   2) Raqamli:       1A2B3C4D  yoki  1A 2B 3C
-  3) Qatorma-qator: har qatorda bitta javob (ochiq javoblar uchun)
-         1. a
-         2. 12.5
-         3. x=2
-     yoki ";" bilan ajratib:  a; 12.5; x=2
+  3) Qatorma-qator: 1. A / 2. B ...  yoki  A; B; C
+"-" -> javob berilmagan (faqat o'quvchi javobida). E yoki F yozilsa - aniq xato.
 
-Bitta harf (A-D) -> variantli savol, boshqa har qanday qiymat -> ochiq javob.
-Katta-kichik harf farq qilmaydi; ichkarida kichik harf saqlanadi, ko'rsatishda katta harf (fmt_answer).
-E yoki F yozilsa - xato (eski odat yoki xato terilgan), jim o'tkazib yuborilmaydi.
-"-" -> javob berilmagan (faqat o'quvchi javobida).
-Ochiq javob kalitida "|" bilan bir nechta to'g'ri variant berish mumkin: 0.5|1/2
+Eslatma: avvalgi versiyalarda ochiq (yozma javobli, t="o") savollar ham bo'lgan. Bazadagi shunday eski testlar
+buzilmasligi uchun ularni o'qish va baholash (open_equal) saqlangan, lekin yangi kalitda ochiq javob qabul qilinmaydi.
 """
 from __future__ import annotations
 
@@ -101,23 +96,29 @@ def parse_answers(text: str) -> list[str]:
 
 
 def build_questions(answers: list[str]) -> list[dict]:
-    """Kalit javoblaridan savollar ro'yxatini tuzadi: {"t": "c"|"o", "a": javob, "p": ball}."""
+    """Kalit javoblaridan savollar ro'yxatini tuzadi: {"t": "c", "a": javob, "p": ball}."""
     questions = []
     for i, a in enumerate(answers, start=1):
         if a == SKIP or not a.strip("| "):
             raise ParseError(f"{i}-savolning to'g'ri javobi ko'rsatilmagan.")
-        if len(a) == 1 and a in LETTERS:
-            questions.append({"t": "c", "a": a, "p": 1.0})
-        else:
-            questions.append({"t": "o", "a": a, "p": 1.0})
+        if not (len(a) == 1 and a in LETTERS):
+            raise ParseError(_not_option(i, a))
+        questions.append({"t": "c", "a": a, "p": 1.0})
     return questions
+
+
+def _not_option(num: int, answer: str) -> str:
+    return (
+        f"{num}-savolning javobi «{answer[:20]}» — tushunarsiz. Har bir savolning javobi faqat bitta harf: "
+        "<b>A, B, C yoki D</b>.\nNamuna: <code>1A2B3C4D</code> yoki <code>ABCDABCD</code>"
+    )
 
 
 _RE_CORRECTION = re.compile(r"^(\d+)\s*[.):=]?\s*(\S.*)$", re.S)
 
 
 def parse_corrections(text: str, n: int) -> dict[int, str]:
-    """Alohida savollarni tuzatish: har qatorda (yoki ";" bilan) "5 B", "5. B", "5B", "7 = 12.5".
+    """Alohida savollarni tuzatish: har qatorda (yoki ";" bilan) "5 B", "5. B", "5B", "7 = D".
 
     Qaytaradi: {savol raqami (1 dan): yangi to'g'ri javob}.
     """
@@ -131,7 +132,7 @@ def parse_corrections(text: str, n: int) -> dict[int, str]:
         if not m:
             raise ParseError(
                 f"«{item[:30]}» ni tushunmadim. Har bir tuzatish <b>savol raqami va yangi javob</b> bo'lishi kerak, "
-                "masalan: <code>5 B</code> yoki <code>7. 12.5</code>"
+                "masalan: <code>5 B</code> yoki <code>7. D</code>"
             )
         num, answer = int(m.group(1)), _clean(m.group(2))
         if not 1 <= num <= n:
@@ -145,8 +146,8 @@ def parse_corrections(text: str, n: int) -> dict[int, str]:
                 f"{num}-savolda «{answer.upper()}» yozilgan, lekin bunday variant yo'q — "
                 "variantlar faqat <b>A, B, C, D</b>."
             )
-        if len(answer) > MAX_OPEN_ANSWER_LEN:
-            raise ParseError(f"{num}-savolning javobi juda uzun (ko'pi bilan {MAX_OPEN_ANSWER_LEN} belgi).")
+        if not (len(answer) == 1 and answer in LETTERS):
+            raise ParseError(_not_option(num, answer))
         result[num] = answer
     return result
 
