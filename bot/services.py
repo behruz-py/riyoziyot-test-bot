@@ -167,14 +167,14 @@ def pct_text(pct: float) -> str:
 def feedback(pct: float) -> str:
     """Natija foiziga qarab qisqa baho."""
     if pct >= 100:
-        return "🏆 Mukammal! Barcha javoblar to'g'ri!"
-    if pct >= 90:
-        return "🌟 A'lo natija! Barakalla!"
+        return "🏆 A'lo! Barcha javoblar to'g'ri!"
+    if pct >= 85:
+        return "🌟 Juda yaxshi natija!"
     if pct >= 70:
         return "👍 Yaxshi natija!"
     if pct >= 50:
-        return "🙂 Yomon emas — yana biroz harakat qiling!"
-    return "💪 Keyingi safar albatta yaxshiroq bo'ladi!"
+        return "🙂 Qoniqarli. Yana biroz harakat qiling!"
+    return "💪 Ko'proq mashq qiling — keyingi safar albatta yaxshiroq bo'ladi!"
 
 
 def answers_grid(questions: list[dict], answers: list[str], flags: list[int], reveal: bool) -> list[str]:

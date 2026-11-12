@@ -67,7 +67,7 @@ FEATURES: list[Feature] = [
             "Natijada va yakuniy xabarda ishtirokchining nechanchi o'rinda ekani ko'rsatiladi.",
             "student", basic=False),
     Feature("feedback", "Natijaga baho",
-            "Natija foiziga qarab qisqa baho: «🌟 A'lo natija!», «👍 Yaxshi natija!» va hokazo.",
+            "Natija foiziga qarab qisqa baho: «🏆 A'lo!», «🌟 Juda yaxshi», «👍 Yaxshi», «🙂 Qoniqarli» va hokazo.",
             "student", basic=True),
     Feature("show_time", "Topshirilgan vaqt",
             "Natijada javoblar yuborilgan sana va vaqt ko'rsatiladi.",

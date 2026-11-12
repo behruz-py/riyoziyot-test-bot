@@ -785,7 +785,7 @@ async def scenario():
     out = await msg(S2, f"{code}*a;b;c;d;A")
     assert "Javoblaringizni tekshiring" in out, out
     out = await cb(S2, "sv:ok")
-    assert "🏆 Mukammal" in out and "7.3 / 7.3" in out and "O'rin: <b>1 / 2</b>" in out, out
+    assert "🏆 A'lo! Barcha javoblar to'g'ri!" in out and "Mukammal" not in out and "7.3 / 7.3" in out and "O'rin: <b>1 / 2</b>" in out, out
     assert "yakunlangach ko'rsatiladi" not in out, "hammasi to'g'ri bo'lsa eslatma kerak emas"
     out = await msg(S3, f"/start test_{code}")
     assert "Savollar soni" in out, out

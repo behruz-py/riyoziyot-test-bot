@@ -123,6 +123,11 @@ def main():
 
     assert kp.fmt_num(4.5) == "4.5" and kp.fmt_num(3.0) == "3" and kp.fmt_num(0) == "0"
     assert kp.fmt_num(33.300000001) == "33.3"
+    # Natijaga baho: chegaralar
+    from bot.services import feedback
+    for pct, start in ((100, "🏆 A'lo"), (99.9, "🌟 Juda yaxshi"), (85, "🌟 Juda yaxshi"), (84.9, "👍 Yaxshi"),
+                       (70, "👍 Yaxshi"), (69.9, "🙂 Qoniqarli"), (50, "🙂 Qoniqarli"), (49.9, "💪"), (0, "💪")):
+        assert feedback(pct).startswith(start), (pct, feedback(pct))
     print("keyparser: OK")
 
 
