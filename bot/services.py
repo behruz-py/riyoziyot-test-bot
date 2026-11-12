@@ -141,18 +141,58 @@ def points_on() -> bool:
     return features.on("points")
 
 
-def result_percent(sub, total_q: int) -> str:
-    """Natija foizi: ball tizimida - ball bo'yicha, aks holda - to'g'ri javoblar bo'yicha."""
-    if points_on():
-        return percent(sub["score"], sub["max_score"])
-    return percent(sub["correct_count"], total_q)
-
-
 def short_result(sub, total_q: int) -> str:
     """Qisqa natija: «5.2 / 7.3 ball» yoki «3 / 5 to'g'ri»."""
     if points_on():
         return f"<b>{kp.fmt_num(sub['score'])}</b> / {kp.fmt_num(sub['max_score'])} ball"
     return f"<b>{sub['correct_count']}</b> / {total_q} to'g'ri"
+
+
+def _pct(part: float, whole: float) -> float:
+    return part * 100 / whole if whole else 0.0
+
+
+def sub_percent(sub, total_q: int) -> float:
+    """Natija foizi (son): ball tizimida - ball bo'yicha, aks holda - to'g'ri javoblar bo'yicha."""
+    if points_on():
+        return _pct(sub["score"], sub["max_score"])
+    return _pct(sub["correct_count"], total_q)
+
+
+def pct_text(pct: float) -> str:
+    """Foiz butun songa yaxlitlanadi: 71.23 -> «71%»."""
+    return f"{int(pct + 0.5)}%"
+
+
+def feedback(pct: float) -> str:
+    """Natija foiziga qarab qisqa baho."""
+    if pct >= 100:
+        return "🏆 Mukammal! Barcha javoblar to'g'ri!"
+    if pct >= 90:
+        return "🌟 A'lo natija! Barakalla!"
+    if pct >= 70:
+        return "👍 Yaxshi natija!"
+    if pct >= 50:
+        return "🙂 Yomon emas — yana biroz harakat qiling!"
+    return "💪 Keyingi safar albatta yaxshiroq bo'ladi!"
+
+
+def answers_grid(questions: list[dict], answers: list[str], flags: list[int], reveal: bool) -> list[str]:
+    """Javoblar jadvali: «1A✅  2C❌(B)  3⚪️» - qatorda 5 tadan.
+
+    reveal=True bo'lsa, xato va javobsiz savollar yonida to'g'ri javob ko'rsatiladi.
+    Eski (ochiq savolli) testlarda har bir savol alohida qatorda chiqadi.
+    """
+    marks = {1: "✅", 0: "❌", -1: "⚪️"}
+    cells = []
+    for i, (q, a, flag) in enumerate(zip(questions, answers, flags), start=1):
+        given = "" if a == kp.SKIP else escape(kp.fmt_answer(a))
+        hint = f"({escape(kp.fmt_answer(q['a']))})" if reveal and flag != 1 else ""
+        cells.append((i, given, marks[flag], hint))
+    if all(q["t"] == "c" for q in questions):
+        texts = [f"{i}{given}{mark}{hint}" for i, given, mark, hint in cells]
+        return ["  ".join(texts[k:k + 5]) for k in range(0, len(texts), 5)]
+    return [f"{i}) {given or '—'} {mark}{(' ' + hint) if hint else ''}" for i, given, mark, hint in cells]
 
 
 def rank_line(pos: int, sub, total_q: int, me_id: int | None = None) -> str:
@@ -162,13 +202,13 @@ def rank_line(pos: int, sub, total_q: int, me_id: int | None = None) -> str:
         name = f"<b>{name}</b> 👈"
     if points_on():
         return f"{prefix} {name} — <b>{kp.fmt_num(sub['score'])}</b> ball ({sub['correct_count']}/{total_q})"
-    return f"{prefix} {name} — <b>{sub['correct_count']}</b> / {total_q} to'g'ri"
+    return f"{prefix} {name} — <b>{sub['correct_count']}/{total_q}</b> ({pct_text(sub_percent(sub, total_q))})"
 
 
 def ranking_lines(test, subs: list, total: int, me_id: int | None = None) -> list[str]:
     total_q = len(questions_of(test))
     status = "yakuniy" if not is_open(test) else "joriy"
-    lines = [f"🏆 <b>{escape(test['title'])}</b> — {status} reyting", f"👥 Ishtirokchilar: {total} nafar", ""]
+    lines = [f"🏆 <b>{escape(test['title'])}</b> — {status} reyting", f"👥 {total} nafar ishtirokchi", ""]
     if not subs:
         lines.append("Hozircha hech kim javob yubormagan.")
     lines += [rank_line(pos, s, total_q, me_id) for pos, s in enumerate(subs, start=1)]
@@ -178,50 +218,31 @@ def ranking_lines(test, subs: list, total: int, me_id: int | None = None) -> lis
 
 
 def result_lines(test, sub, rank: int, total: int) -> list[str]:
+    """Ishtirokchiga natija: test nomi, javoblar jadvali, to'g'ri javoblar, o'rin va baho."""
     questions = questions_of(test)
     answers = json.loads(sub["answers"])
     res = kp.grade(questions, answers)
     finished = not is_open(test)
-    lines = [
-        f"📋 <b>{escape(test['title'])}</b> (kod: <code>{test['code']}</code>)",
-        f"👤 {escape(sub['full_name'])}",
-        "",
-    ]
-    if points_on():
-        lines += [
-            f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(questions)}</b>",
-            f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
-            f"({percent(sub['score'], sub['max_score'])}%)",
-        ]
-    else:
-        lines.append(
-            f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(questions)}</b> "
-            f"({result_percent(sub, len(questions))}%)"
-        )
-    if features.on("rating"):
-        lines.append(f"🏅 O'rin: <b>{rank} / {total}</b> ({'yakuniy' if finished else 'hozircha'})")
-    lines += [f"🕒 Topshirilgan: {to_local(sub['submitted_at'])}", ""]
     reveal = finished and features.on("show_answers")
-    wrong = [i for i, f in enumerate(res["flags"]) if f == 0]
-    skipped = [i for i, f in enumerate(res["flags"]) if f == -1]
-    if not wrong and not skipped:
-        lines.append("🎉 Barcha javoblaringiz to'g'ri. Barakalla!")
-        return lines
-    if wrong:
-        lines.append(f"❌ <b>Xato javoblar ({len(wrong)} ta):</b>")
-        for i in wrong:
-            line = f"{i + 1}) siz: <code>{escape(kp.fmt_answer(answers[i]))}</code>"
-            if reveal:
-                line += f" → to'g'ri: <code>{escape(kp.fmt_answer(questions[i]['a']))}</code>"
-            lines.append(line)
-    if skipped:
-        lines.append(f"⚪️ <b>Javobsiz ({len(skipped)} ta):</b> " + ", ".join(str(i + 1) for i in skipped))
-        if reveal:
-            lines += [
-                f"{i + 1}) to'g'ri: <code>{escape(kp.fmt_answer(questions[i]['a']))}</code>" for i in skipped
-            ]
-    if not finished and features.on("show_answers"):
-        lines += ["", "ℹ️ To'g'ri javoblar test yakunlangach «📊 Natijalarim» bo'limida ko'rinadi."]
+    n = len(questions)
+    pct = sub_percent(sub, n)
+
+    lines = [f"📋 <b>{escape(test['title'])}</b>", "", *answers_grid(questions, answers, res["flags"], reveal), ""]
+    if points_on():
+        lines.append(
+            f"✅ To'g'ri: <b>{sub['correct_count']} / {n}</b> · 💯 Ball: "
+            f"<b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> ({pct_text(pct)})"
+        )
+    else:
+        lines.append(f"✅ To'g'ri: <b>{sub['correct_count']} / {n}</b> ({pct_text(pct)})")
+    if features.on("rating"):
+        lines.append(f"🏅 O'rin: <b>{rank} / {total}</b>" + ("" if finished else " (hozircha)"))
+    if features.on("show_time"):
+        lines.append(f"🕒 {to_local(sub['submitted_at'])}")
+    if features.on("feedback"):
+        lines += ["", feedback(pct)]
+    if not finished and features.on("show_answers") and res["correct"] < n:
+        lines += ["", "<i>ℹ️ To'g'ri javoblar test yakunlangach ko'rsatiladi.</i>"]
     return lines
 
 
@@ -290,18 +311,20 @@ async def _notify_participants(bot: Bot, test, subs: list) -> None:
     total = len(subs)
     total_q = len(questions_of(test))
     rating = features.on("rating")
-    answers = features.on("show_answers")
     messages = []
     for pos, sub in enumerate(subs, start=1):
-        text = f"🏁 <b>{escape(test['title'])}</b> testi yakunlandi!\n\n"
-        if rating:
-            text += f"🏅 Yakuniy o'rningiz: <b>{pos} / {total}</b>\n"
+        pct = sub_percent(sub, total_q)
         if points_on():
-            text += f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b>"
+            result = f"💯 <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> ball ({pct_text(pct)})"
         else:
-            text += f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {total_q}</b>"
-        if answers:
-            text += "\n\nTo'g'ri javoblarni «📊 Natijalarim» bo'limida ko'rishingiz mumkin."
+            result = f"✅ <b>{sub['correct_count']} / {total_q}</b> ({pct_text(pct)})"
+        if rating:
+            result += f" · 🏅 <b>{pos}</b>-o'rin ({total} nafardan)"
+        text = f"🏁 <b>{escape(test['title'])}</b> yakunlandi\n\n{result}"
+        if features.on("feedback"):
+            text += f"\n{feedback(pct)}"
+        if features.on("show_answers"):
+            text += "\n\n<i>To'g'ri javoblar — «📊 Natijalarim» bo'limida.</i>"
         messages.append((sub["user_id"], text))
     await send_many(bot, messages, reply_markup=result_kb(test["id"]))
 

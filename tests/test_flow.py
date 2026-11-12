@@ -306,9 +306,11 @@ async def features_check():
     assert "Javoblaringizni tekshiring" in out, out
     out = await cb(S1, "sv:ok")
     assert "O'rin" in out and f"rating:{t3['id']}" in last_markup_data(), out
-    assert "To'g'ri javoblar: <b>3 / 4</b> (75%)" in out and "ball" not in out.lower(), out
+    assert "1A✅  2B✅  3C✅  4A❌" in out and "To'g'ri: <b>3 / 4</b> (75%)" in out, out
+    assert "👍 Yaxshi natija!" in out and "🕒" not in out and "ball" not in out.lower(), out
+    assert "Javoblaringizni" not in out.split("📋")[-1], "natijada ortiqcha matn"
     out = await cb(S1, f"rating:{t3['id']}")
-    assert "— <b>3</b> / 4 to'g'ri" in out and "ball" not in out.lower(), out
+    assert "— <b>3/4</b> (75%)" in out and "ball" not in out.lower(), out
     out = await msg(S1, kb.BTN_MY_RESULTS)
     assert "ball" not in out.lower()
     out = await msg(S1, t3["code"])  # avval yuborgan - natijasi qayta ko'rsatiladi
@@ -356,7 +358,7 @@ async def features_check():
     out = await cb(TEACHER, f"t:post:{t3['id']}")
     assert not any(d.startswith("t:note") for d in last_markup_data()) and "izohingizni" not in out, out
     out = await cb(TEACHER, f"t:res:{t3['id']}")
-    assert "Excel" not in out and "O'rtacha natija" in out and "to'g'ri" in out and "ball" not in out.lower(), out
+    assert "Excel" not in out and "o'rtacha natija: <b>" in out and "ball" not in out.lower(), out
     out = await cb(TEACHER, f"t:key:{t3['id']}")
     assert "ball" not in out.lower(), out
 
@@ -368,7 +370,15 @@ async def features_check():
     await settle()
     assert not sent_to(start, S1) and not sent_to(start, S2) and "SendDocument" not in names(start), names(start)
     out = await cb(S1, f"res:{t3['id']}")
-    assert "Xato javoblar" in out and "to'g'ri: <code>" not in out and "ko'rinadi" not in out, out
+    assert "4A❌" in out and "(D)" not in out and "ko'rsatiladi" not in out, out  # to'g'ri javob yashirin
+
+    # --- vaqt va baho: admin paneldan
+    await features.set_value("show_time", True)
+    await features.set_value("feedback", False)
+    out = await cb(S1, f"res:{t3['id']}")
+    assert "🕒" in out and "Yaxshi natija" not in out, out
+    await features.set_value("show_time", False)
+    await features.set_value("feedback", True)
 
     # --- ball o'chiq: Excel va sertifikatda ball yo'q, kalit tahririda ham
     from io import BytesIO
@@ -748,10 +758,11 @@ async def scenario():
     assert "Javoblaringizni tekshiring" in out, out
     restart()  # tasdiqlash oldidan server qayta ishga tushdi
     out = await cb(S1, "sv:ok")
-    assert "qabul qilindi" in out and "3 / 5" in out and "5.2 / 7.3" in out, out
-    assert "1 / 1" in out and "Xato javoblar (1 ta)" in out and "Javobsiz (1 ta):</b> 4" in out, out
-    assert "siz: <code>C</code>" in out, out
-    assert "to'g'ri: <code>" not in out, "kalit test tugamasdan oshkor bo'ldi"
+    assert "qabul qilindi" in out and "1A✅  2C❌  3C✅  4⚪️  5A✅" in out, out
+    assert "To'g'ri: <b>3 / 5</b> · 💯 Ball: <b>5.2 / 7.3</b> (71%)" in out, out
+    assert "O'rin: <b>1 / 1</b> (hozircha)" in out and "🕒" in out and "👍 Yaxshi natija!" in out, out
+    assert "(B)" not in out and "(D)" not in out, "kalit test tugamasdan oshkor bo'ldi"
+    assert "To'g'ri javoblar test yakunlangach ko'rsatiladi" in out, out
     # qayta yuborish
     out = await msg(S1, f"{code}*1. a\n2. b\n3. c\n4. d\n5. a")
     assert "avval javob yuborgansiz" in out, out
@@ -764,7 +775,8 @@ async def scenario():
     out = await msg(S2, f"{code}*a;b;c;d;A")
     assert "Javoblaringizni tekshiring" in out, out
     out = await cb(S2, "sv:ok")
-    assert "Barcha javoblaringiz to'g'ri" in out and "7.3 / 7.3" in out and "1 / 2" in out, out
+    assert "🏆 Mukammal" in out and "7.3 / 7.3" in out and "O'rin: <b>1 / 2</b>" in out, out
+    assert "yakunlangach ko'rsatiladi" not in out, "hammasi to'g'ri bo'lsa eslatma kerak emas"
     out = await msg(S3, f"/start test_{code}")
     assert "Savollar soni" in out, out
     await msg(S3, "1. b\n2. b\n3. a\n4. d\n5. -")
@@ -844,7 +856,8 @@ async def scenario():
     assert "Ishtirokchilar: <b>3</b>" in out and "Faol" in out, out
     assert "home" in last_markup_data() and "mt:0" in last_markup_data()
     out = await cb(TEACHER, f"t:res:{tid}")
-    assert "O'rtacha natija: <b>4.87</b> / 7.3 ball" in out, out
+    assert "Ishtirokchilar: <b>3</b> · o'rtacha natija: <b>67%</b>" in out, out  # (100 + 71.2 + 28.8) / 3
+    assert "🥇 Bobur Mirzo — <b>7.3</b> ball (5/5)" in out and "Eng yuqori" not in out, out
     start = len(session.calls)
     await cb(TEACHER, f"t:xl:{tid}")
     assert "SendDocument" in names(start)
@@ -1039,10 +1052,10 @@ async def scenario():
     out = await cb(TEACHER, f"t:finok:{tid}")
     await settle()
     out = texts(start)
-    assert "Test yakunlandi" in out and "Yakuniy o'rningiz: <b>1 / 3</b>" in out, out
+    assert "Test yakunlandi" in out and "🏅 <b>1</b>-o'rin (3 nafardan)" in out, out
     assert "SendDocument" in names(start)
     out = await cb(S1, f"res:{tid}")
-    assert "to'g'ri: <code>B</code>" in out and "to'g'ri: <code>D</code>" in out and "yakuniy" in out, out
+    assert "2C❌(B)" in out and "4⚪️(D)" in out and "O'rin: <b>2 / 3</b>" in out and "hozircha" not in out, out
     out = await msg(77, f"{code}*abcda")
     assert "yakunlangan" in out, out
 
@@ -1114,11 +1127,11 @@ async def scenario():
     assert "yakunlangan" in out, out
     start = len(session.calls)
     watcher = asyncio.create_task(services.deadline_watcher(bot))
-    await until(lambda: "avtomatik yakunlandi" in texts(start) and "Yakuniy o'rningiz" in texts(start))
+    await until(lambda: "avtomatik yakunlandi" in texts(start) and "-o'rin (1 nafardan)" in texts(start))
     await settle()
     watcher.cancel()
     out = texts(start)
-    assert "avtomatik yakunlandi" in out and "Yakuniy o'rningiz" in out, out
+    assert "avtomatik yakunlandi" in out and "-o'rin (1 nafardan)" in out, out
     assert not (await db.get_test(t2["id"]))["is_active"]
 
     # --- menyu tugmasi holatni bekor qiladi

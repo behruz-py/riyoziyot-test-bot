@@ -135,21 +135,21 @@ async def test_results(callback: CallbackQuery, user) -> None:
         return
     await callback.answer()
     total = await db.count_submissions(test["id"])
-    subs = await db.submissions_ranked(test["id"], 50)
-    lines = services.ranking_lines(test, subs, total)
-    if subs:
-        all_subs = subs if total <= 50 else await db.submissions_ranked(test["id"])
-        if services.points_on():
-            values, unit = [s["score"] for s in all_subs], f"/ {kp.fmt_num(all_subs[0]['max_score'])} ball"
-        else:
-            values, unit = [s["correct_count"] for s in all_subs], f"/ {len(services.questions_of(test))} to'g'ri"
-        lines += [
-            "",
-            f"📈 O'rtacha natija: <b>{kp.fmt_num(sum(values) / len(values))}</b> {unit}",
-            f"🔝 Eng yuqori: <b>{kp.fmt_num(max(values))}</b> · eng past: <b>{kp.fmt_num(min(values))}</b>",
-            "",
-            *(["To'liq ro'yxat va har bir savol tahlili — «📥 Excel hisobot»da."] if features.on("excel") else []),
-        ]
+    n = len(services.questions_of(test))
+    status = "🟢 davom etmoqda" if services.is_open(test) else "🔴 yakunlangan"
+    lines = [f"📊 <b>{escape(test['title'])}</b> — natijalar", f"Holati: {status}", ""]
+    if not total:
+        lines.append("Hozircha hech kim javob yubormagan.")
+        await services.send_long(callback.bot, user["id"], lines)
+        return
+    all_subs = list(await db.submissions_ranked(test["id"]))
+    average = sum(services.sub_percent(s, n) for s in all_subs) / len(all_subs)
+    lines += [f"👥 Ishtirokchilar: <b>{total}</b> · o'rtacha natija: <b>{services.pct_text(average)}</b>", ""]
+    lines += [services.rank_line(pos, s, n) for pos, s in enumerate(all_subs[:50], start=1)]
+    if total > 50:
+        lines.append(f"… va yana {total - 50} nafar")
+    if features.on("excel"):
+        lines += ["", "<i>📥 To'liq ro'yxat va har bir savol tahlili — Excel hisobotda.</i>"]
     await services.send_long(callback.bot, user["id"], lines)
 
 
