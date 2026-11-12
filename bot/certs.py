@@ -107,7 +107,11 @@ def number(test, sub) -> str:
 async def _result(test, sub) -> dict:
     """Sertifikat va tekshiruv javobi uchun umumiy ma'lumotlar."""
     finished = not services.is_open(test)
-    percent = sub["score"] * 100 / sub["max_score"] if sub["max_score"] else 0.0
+    total_q = len(services.questions_of(test))
+    if services.points_on():
+        percent = sub["score"] * 100 / sub["max_score"] if sub["max_score"] else 0.0
+    else:
+        percent = sub["correct_count"] * 100 / total_q if total_q else 0.0
     rank = await db.rank_of(sub) if finished else None
     return {
         "finished": finished,
@@ -144,6 +148,7 @@ async def issue(bot: Bot, test, sub) -> tuple[bytes, bytes, dict]:
         signer=conf[KEY_SIGNER],
         signer_role=conf[KEY_ROLE],
         logo=await logo_bytes(bot),
+        show_points=services.points_on(),
     )
     info["title"] = tier_title(info["tier"])
     return png, pdf, info
@@ -158,7 +163,7 @@ async def sample(bot: Bot) -> bytes:
         name="Aliyev Vali", title="Namuna test", correct=27, total_q=30, score="27", max_score="30",
         percent=90.0, rank=1, participants=120, date=services.to_local(db.now_utc())[:10], number="00000-00000",
         tier="place1", verify_url=f"https://t.me/{me.username}", org=conf[KEY_ORG], signer=conf[KEY_SIGNER],
-        signer_role=conf[KEY_ROLE], logo=await logo_bytes(bot),
+        signer_role=conf[KEY_ROLE], logo=await logo_bytes(bot), show_points=services.points_on(),
     )
     return png
 
@@ -192,10 +197,13 @@ async def verify_text(payload: str) -> str:
         f"🎓 {tier_title(info['tier'])}\n"
         f"👤 <b>{escape(sub['full_name'])}</b>\n"
         f"📋 {escape(test['title'])}\n"
-        f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
-        f"({services.percent(sub['score'], sub['max_score'])}%)\n"
+        + (f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
+           f"({services.percent(sub['score'], sub['max_score'])}%)\n" if services.points_on() else
+           f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(services.questions_of(test))}</b> "
+           f"({kp.fmt_num(info['percent'])}%)\n")
+        +
         f"{place}\n"
         f"📅 Sana: {info['date']}\n\n"
-        "<i>Qog'ozdagi ism, ball va o'rin shu ma'lumotlar bilan bir xil bo'lishi kerak. "
+        "<i>Qog'ozdagi ism, natija va o'rin shu ma'lumotlar bilan bir xil bo'lishi kerak. "
         "Farq qilsa — sertifikat o'zgartirilgan.</i>"
     )

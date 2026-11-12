@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from html import escape
 
 from aiogram import F, Router
@@ -88,8 +89,8 @@ async def _view(test):
         f"📋 <b>{escape(test['title'])}</b>\n\n"
         f"🔢 Kod: <code>{test['code']}</code>\n"
         f"❓ Savollar: <b>{services.questions_count(questions)}</b>\n"
-        f"💯 Ball: {services.points_summary(questions)}\n"
-        f"👥 Ishtirokchilar: <b>{participants}</b> nafar\n"
+        + (f"💯 Ball: {services.points_summary(questions)}\n" if services.points_on() else "")
+        + f"👥 Ishtirokchilar: <b>{participants}</b> nafar\n"
         f"📅 Yaratilgan: {services.to_local(test['created_at'])}\n"
         + (f"⏰ Muddat: {services.to_local(test['deadline']) + ' gacha' if test['deadline'] else 'belgilanmagan'}\n"
            if test["deadline"] or features.on("deadline") else "")
@@ -138,11 +139,14 @@ async def test_results(callback: CallbackQuery, user) -> None:
     lines = services.ranking_lines(test, subs, total)
     if subs:
         all_subs = subs if total <= 50 else await db.submissions_ranked(test["id"])
-        scores = [s["score"] for s in all_subs]
+        if services.points_on():
+            values, unit = [s["score"] for s in all_subs], f"/ {kp.fmt_num(all_subs[0]['max_score'])} ball"
+        else:
+            values, unit = [s["correct_count"] for s in all_subs], f"/ {len(services.questions_of(test))} to'g'ri"
         lines += [
             "",
-            f"📈 O'rtacha ball: <b>{kp.fmt_num(sum(scores) / len(scores))}</b> / {kp.fmt_num(all_subs[0]['max_score'])}",
-            f"🔝 Eng yuqori: <b>{kp.fmt_num(max(scores))}</b> · eng past: <b>{kp.fmt_num(min(scores))}</b>",
+            f"📈 O'rtacha natija: <b>{kp.fmt_num(sum(values) / len(values))}</b> {unit}",
+            f"🔝 Eng yuqori: <b>{kp.fmt_num(max(values))}</b> · eng past: <b>{kp.fmt_num(min(values))}</b>",
             "",
             *(["To'liq ro'yxat va har bir savol tahlili — «📥 Excel hisobot»da."] if features.on("excel") else []),
         ]
@@ -165,7 +169,7 @@ async def test_excel(callback: CallbackQuery, user) -> None:
     await callback.bot.send_chat_action(user["id"], "upload_document")
     from ..excel import build_report
 
-    data = await asyncio.to_thread(build_report, dict(test), [dict(s) for s in subs])
+    data = await asyncio.to_thread(build_report, dict(test), [dict(s) for s in subs], services.points_on())
     await callback.bot.send_document(
         user["id"],
         BufferedInputFile(data, filename=f"natijalar_{test['code']}.xlsx"),
@@ -181,7 +185,7 @@ async def test_key(callback: CallbackQuery, user) -> None:
     await callback.answer()
     questions = services.questions_of(test)
     lines = [f"🔑 <b>{escape(test['title'])}</b> — to'g'ri javoblar:", "", *services.key_preview(questions)]
-    if len({q["p"] for q in questions}) > 1:
+    if services.points_on() and len({q["p"] for q in questions}) > 1:
         lines += ["", "⚖️ Ballar: " + ", ".join(f"{i}) {kp.fmt_num(q['p'])}" for i, q in enumerate(questions, start=1))]
     await services.send_long(callback.bot, user["id"], lines)
 
@@ -273,7 +277,10 @@ async def _participants_page(test, page: int):
     for sub in await db.participants(tid, PAGE, page * PAGE):
         mark = "🚫 " if sub["is_hidden"] else ""
         kb.row(InlineKeyboardButton(
-            text=f"{mark}{sub['full_name'][:32]} — {kp.fmt_num(sub['score'])}",
+            text=f"{mark}{sub['full_name'][:32]} — " + (
+                kp.fmt_num(sub["score"]) if services.points_on()
+                else f"{sub['correct_count']}/{len(json.loads(sub['answers']))}"
+            ),
             callback_data=f"t:pu:{tid}:{sub['user_id']}",
         ))
     row = pager(f"t:pl:{tid}", page, pages)
@@ -304,9 +311,10 @@ async def _participant_card(test, user_id: int):
         f"👤 <b>{escape(sub['full_name'])}</b>\n\n"
         f"Username: {escape(username)}\n"
         f"ID: <code>{user_id}</code>\n"
-        f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
-        f"({sub['correct_count']} ta to'g'ri)\n"
-        f"🕒 Topshirgan: {services.to_local(sub['submitted_at'])}\n"
+        + (f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
+           f"({sub['correct_count']} ta to'g'ri)\n" if services.points_on() else
+           f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(json.loads(sub['answers']))}</b>\n")
+        + f"🕒 Topshirgan: {services.to_local(sub['submitted_at'])}\n"
         f"Holati: {status}"
     )
     kb = InlineKeyboardBuilder()

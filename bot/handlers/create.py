@@ -68,7 +68,7 @@ CONTINUE_KB = InlineKeyboardMarkup(inline_keyboard=[
 # ---------------------------------------------------------------- qadamlar (soni yoqilgan funksiyalarga bog'liq)
 def _steps() -> list[str]:
     steps = ["title", "key"]
-    if features.on("custom_points"):
+    if features.on("points"):
         steps.append("points")
     if features.on("deadline"):
         steps.append("deadline")
@@ -134,7 +134,7 @@ async def _show_key_step(bot: Bot, user_id: int, state: FSMContext) -> None:
         "☝️ Kalitni ko'zdan kechiring. Xato bo'lsa — to'g'rilab, <b>qaytadan yuboring</b>.",
         "",
     ]
-    if features.on("custom_points"):
+    if features.on("points"):
         lines += [f"⚖️ <b>{_step('points')}: ball tizimi</b>", "Hammasi to'g'ri bo'lsa, ball tizimini tanlang 👇"]
         markup = POINTS_KB
     else:
@@ -201,8 +201,9 @@ async def _ask_confirm(bot: Bot, user_id: int, state: FSMContext, deadline: str 
         "",
         f"📋 Nomi: <b>{escape(data['title'])}</b>",
         f"❓ Savollar: <b>{services.questions_count(questions)}</b>",
-        f"💯 Ball: {services.points_summary(questions)}",
     ]
+    if services.points_on():
+        lines.append(f"💯 Ball: {services.points_summary(questions)}")
     if features.on("deadline") or deadline:
         lines.append(f"⏰ Muddat: <b>{services.to_local(deadline) + ' gacha' if deadline else 'belgilanmagan'}</b>")
     lines += ["", "To'g'ri bo'lsa, <b>«✅ Testni yaratish»</b>ni bosing."]
@@ -290,7 +291,7 @@ async def points_choice(callback: CallbackQuery, state: FSMContext, user) -> Non
         await callback.answer("Avval javoblar kalitini yuboring.", show_alert=True)
         return
     await callback.answer()
-    if callback.data == "cr:p:custom" and features.on("custom_points"):
+    if callback.data == "cr:p:custom" and features.on("points"):
         await _ask_points(callback.bot, user["id"], state)
         return
     for q in data["questions"]:
@@ -366,7 +367,8 @@ async def build_post(bot: Bot, test) -> str:
     if test["note"] and features.on("post_note"):
         lines += [escape(test["note"]), ""]
     lines.append(f"❓ Savollar soni: <b>{len(questions)} ta</b>")
-    lines.append(f"💯 Ball: {services.points_summary(questions)}")
+    if services.points_on():
+        lines.append(f"💯 Ball: {services.points_summary(questions)}")
     if test["deadline"]:
         lines.append(f"⏰ Javoblar qabul qilinadi: <b>{services.to_local(test['deadline'])}</b> gacha")
     if owner and owner["full_name"]:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from html import escape
 
@@ -71,14 +72,19 @@ async def _ask_answers(bot: Bot, user_id: int, state: FSMContext, test) -> None:
     questions = services.questions_of(test)
     await state.set_state(Solve.answers)
     await state.set_data({"test_id": test["id"]})
-    deadline = f"\n⏰ Muddat: <b>{services.to_local(test['deadline'])}</b> gacha" if test["deadline"] else ""
+    info = [
+        f"📋 <b>{escape(test['title'])}</b>",
+        f"🔢 Kod: <code>{test['code']}</code>",
+        f"❓ Savollar soni: <b>{len(questions)}</b> ta",
+    ]
+    if services.points_on():
+        info.append(f"💯 Ball: {services.points_summary(questions)}")
+    if test["deadline"]:
+        info.append(f"⏰ Muddat: <b>{services.to_local(test['deadline'])}</b> gacha")
     await bot.send_message(
         user_id,
-        f"📋 <b>{escape(test['title'])}</b>\n"
-        f"🔢 Kod: <code>{test['code']}</code>\n"
-        f"❓ Savollar soni: <b>{len(questions)}</b> ta\n"
-        f"💯 Ball: {services.points_summary(questions)}{deadline}\n\n"
-        f"{answer_guide(questions)}\n\n"
+        "\n".join(info) + "\n\n"
+        + f"{answer_guide(questions)}\n\n"
         + ("<i>Yuborishdan oldin javoblaringizni ko'rib chiqish imkoni beriladi.</i>"
            if features.on("confirm_submit") else
            "❗️ Javobni faqat <b>bir marta</b> yuborish mumkin — yuborishdan oldin tekshirib oling."),
@@ -345,7 +351,10 @@ async def _results_page(user_id: int, page: int):
     page = max(0, min(page, pages - 1))
     for s in await db.submissions_by_user(user_id, PAGE, page * PAGE):
         kb.row(InlineKeyboardButton(
-            text=f"{s['title'][:35]} — {kp.fmt_num(s['score'])}/{kp.fmt_num(s['max_score'])}",
+            text=f"{s['title'][:35]} — " + (
+                f"{kp.fmt_num(s['score'])}/{kp.fmt_num(s['max_score'])}" if services.points_on()
+                else f"{s['correct_count']}/{len(json.loads(s['answers']))}"
+            ),
             callback_data=f"res:{s['test_id']}",
         ))
     row = pager("myres", page, pages)
@@ -394,7 +403,8 @@ async def send_rating(bot: Bot, user, test, reply_markup=None) -> bool:
     if sub is not None:
         rank = await db.rank_of(sub)
         if rank > RATING_TOP:
-            lines += ["", f"👉 Sizning o'rningiz: <b>{rank} / {total}</b> — {kp.fmt_num(sub['score'])} ball"]
+            total_q = len(services.questions_of(test))
+            lines += ["", f"👉 Sizning o'rningiz: <b>{rank} / {total}</b> — {services.short_result(sub, total_q)}"]
     await services.send_long(bot, uid, lines, reply_markup=reply_markup)
     return True
 

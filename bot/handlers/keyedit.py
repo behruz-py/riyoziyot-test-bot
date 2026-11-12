@@ -68,9 +68,9 @@ async def _menu(callback: CallbackQuery, state: FSMContext, user, test_id: int) 
         "",
         "<b>Hozirgi kalit:</b>",
         *services.key_preview(questions),
-        "",
-        f"💯 Ball: {services.points_summary(questions)}",
     ]
+    if services.points_on():
+        lines += ["", f"💯 Ball: {services.points_summary(questions)}"]
     if participants:
         lines.append(
             f"👥 Javob yuborganlar: <b>{participants}</b> nafar — saqlaganingizdan keyin ularning barcha natijalari, "
@@ -81,7 +81,7 @@ async def _menu(callback: CallbackQuery, state: FSMContext, user, test_id: int) 
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🎯 Ayrim savollarni tuzatish", callback_data=f"t:edk:fix:{tid}"))
     kb.row(InlineKeyboardButton(text="🔁 Butun kalitni qayta kiritish", callback_data=f"t:edk:full:{tid}"))
-    if features.on("custom_points"):
+    if features.on("points"):
         kb.row(InlineKeyboardButton(text="⚖️ Ballarni o'zgartirish", callback_data=f"t:edk:points:{tid}"))
     kb.row(InlineKeyboardButton(text="⬅️ Testga qaytish", callback_data=f"t:v:{tid}"))
     await callback.answer()
@@ -104,7 +104,8 @@ async def _ask(bot: Bot, user_id: int, state: FSMContext, test, kind: str) -> No
             "Har bir tuzatishni <b>savol raqami va yangi to'g'ri javob</b> ko'rinishida yuboring. "
             "Bir nechta bo'lsa — har birini yangi qatordan:\n"
             "<code>5 B\n12 D\n17 A</code>\n\n"
-            f"<i>Testda {n} ta savol bor. Ko'rsatilmagan savollar o'zgarmaydi, ballar saqlanadi.</i>"
+            f"<i>Testda {n} ta savol bor. Ko'rsatilmagan savollar o'zgarmaydi"
+            + (", ballar saqlanadi.</i>" if services.points_on() else ".</i>")
         )
         markup = _back_kb(tid)
     elif kind == "full":
@@ -112,8 +113,8 @@ async def _ask(bot: Bot, user_id: int, state: FSMContext, test, kind: str) -> No
             "🔁 <b>Butun kalitni qayta kiritish</b>\n\n"
             f"Barcha <b>{n} ta</b> savolning to'g'ri javobini test yaratishdagi kabi yuboring:\n"
             "<code>1A2B3C4D…</code> yoki <code>ABCD…</code>\n\n"
-            "<i>Savollar soni o'zgarmasligi kerak — ishtirokchilar javoblari shu savollarga bog'langan. "
-            "Ballar saqlanadi.</i>"
+            "<i>Savollar soni o'zgarmasligi kerak — ishtirokchilar javoblari shu savollarga bog'langan."
+            + (" Ballar saqlanadi.</i>" if services.points_on() else "</i>")
         )
         markup = _back_kb(tid)
     else:
@@ -132,7 +133,7 @@ async def _ask(bot: Bot, user_id: int, state: FSMContext, test, kind: str) -> No
 async def edit_kind(callback: CallbackQuery, state: FSMContext, user) -> None:
     _, _, kind, test_id = callback.data.split(":")
     test = await _load(callback.bot, user, int(test_id))
-    if kind == "points" and not features.on("custom_points"):
+    if kind == "points" and not features.on("points"):
         await callback.answer(features.OFF_TEXT, show_alert=True)
         return
     if test is None or kind not in KIND_STATES:
@@ -268,12 +269,15 @@ async def _preview(bot: Bot, user, state: FSMContext, test, new: list[dict], kin
         lines += ["", f"💯 Maksimal ball: {kp.fmt_num(old_max)} → <b>{kp.fmt_num(new_max)}</b>"]
     lines.append("")
     participants = await db.count_participants(test["id"])
+    word = "bali" if services.points_on() else "natijasi"
     if not participants:
         lines.append("👥 Hozircha javob yuborganlar yo'q — natijalarga ta'sir qilmaydi.")
     elif not changes:
-        lines.append(f"👥 {participants} nafar ishtirokchining hech birining bali o'zgarmaydi.")
+        lines.append(f"👥 {participants} nafar ishtirokchining hech birining {word} o'zgarmaydi.")
     else:
-        lines.append(f"👥 <b>{len(visible)}</b> nafar ishtirokchining bali o'zgaradi: 📈 {up} ta oshadi, 📉 {down} ta kamayadi.")
+        lines.append(
+            f"👥 <b>{len(visible)}</b> nafar ishtirokchining {word} o'zgaradi: 📈 {up} ta oshadi, 📉 {down} ta kamayadi."
+        )
         if not services.is_open(test):
             lines.append("🏅 Test yakunlangan — reytingdagi o'rinlar ham yangilanadi.")
     lines += ["", "❗️ Saqlangach, eski kalitga qaytib bo'lmaydi (faqat qayta tahrirlash orqali)."]

@@ -137,12 +137,32 @@ def percent(score: float, max_score: float) -> str:
     return kp.fmt_num(score * 100 / max_score if max_score else 0)
 
 
+def points_on() -> bool:
+    return features.on("points")
+
+
+def result_percent(sub, total_q: int) -> str:
+    """Natija foizi: ball tizimida - ball bo'yicha, aks holda - to'g'ri javoblar bo'yicha."""
+    if points_on():
+        return percent(sub["score"], sub["max_score"])
+    return percent(sub["correct_count"], total_q)
+
+
+def short_result(sub, total_q: int) -> str:
+    """Qisqa natija: «5.2 / 7.3 ball» yoki «3 / 5 to'g'ri»."""
+    if points_on():
+        return f"<b>{kp.fmt_num(sub['score'])}</b> / {kp.fmt_num(sub['max_score'])} ball"
+    return f"<b>{sub['correct_count']}</b> / {total_q} to'g'ri"
+
+
 def rank_line(pos: int, sub, total_q: int, me_id: int | None = None) -> str:
     prefix = MEDALS.get(pos, f"{pos}.")
     name = escape(sub["full_name"])
     if me_id is not None and sub["user_id"] == me_id:
         name = f"<b>{name}</b> 👈"
-    return f"{prefix} {name} — <b>{kp.fmt_num(sub['score'])}</b> ball ({sub['correct_count']}/{total_q})"
+    if points_on():
+        return f"{prefix} {name} — <b>{kp.fmt_num(sub['score'])}</b> ball ({sub['correct_count']}/{total_q})"
+    return f"{prefix} {name} — <b>{sub['correct_count']}</b> / {total_q} to'g'ri"
 
 
 def ranking_lines(test, subs: list, total: int, me_id: int | None = None) -> list[str]:
@@ -166,10 +186,18 @@ def result_lines(test, sub, rank: int, total: int) -> list[str]:
         f"📋 <b>{escape(test['title'])}</b> (kod: <code>{test['code']}</code>)",
         f"👤 {escape(sub['full_name'])}",
         "",
-        f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(questions)}</b>",
-        f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
-        f"({percent(sub['score'], sub['max_score'])}%)",
     ]
+    if points_on():
+        lines += [
+            f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(questions)}</b>",
+            f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
+            f"({percent(sub['score'], sub['max_score'])}%)",
+        ]
+    else:
+        lines.append(
+            f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(questions)}</b> "
+            f"({result_percent(sub, len(questions))}%)"
+        )
     if features.on("rating"):
         lines.append(f"🏅 O'rin: <b>{rank} / {total}</b> ({'yakuniy' if finished else 'hozircha'})")
     lines += [f"🕒 Topshirilgan: {to_local(sub['submitted_at'])}", ""]
@@ -225,7 +253,7 @@ async def finish_and_notify(bot: Bot, test_id: int, auto: bool = False) -> bool:
         if subs and features.on("excel"):
             from .excel import build_report  # og'ir import faqat kerak bo'lganda
 
-            data = await asyncio.to_thread(build_report, dict(test), [dict(s) for s in subs])
+            data = await asyncio.to_thread(build_report, dict(test), [dict(s) for s in subs], points_on())
             await bot.send_document(
                 test["owner_id"],
                 BufferedInputFile(data, filename=f"natijalar_{test['code']}.xlsx"),
@@ -260,6 +288,7 @@ async def send_many(bot: Bot, messages: list[tuple[int, str]], reply_markup=None
 
 async def _notify_participants(bot: Bot, test, subs: list) -> None:
     total = len(subs)
+    total_q = len(questions_of(test))
     rating = features.on("rating")
     answers = features.on("show_answers")
     messages = []
@@ -267,7 +296,10 @@ async def _notify_participants(bot: Bot, test, subs: list) -> None:
         text = f"🏁 <b>{escape(test['title'])}</b> testi yakunlandi!\n\n"
         if rating:
             text += f"🏅 Yakuniy o'rningiz: <b>{pos} / {total}</b>\n"
-        text += f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b>"
+        if points_on():
+            text += f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b>"
+        else:
+            text += f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {total_q}</b>"
         if answers:
             text += "\n\nTo'g'ri javoblarni «📊 Natijalarim» bo'limida ko'rishingiz mumkin."
         messages.append((sub["user_id"], text))
@@ -324,13 +356,14 @@ async def notify_regrade(bot: Bot, test, changes: list[dict]) -> int:
         if c["hidden"]:
             continue
         arrow = "📈" if c["score"] > c["old_score"] else "📉" if c["score"] < c["old_score"] else "🔄"
+        ball = (f"{arrow} Ball: {kp.fmt_num(c['old_score'])} → <b>{kp.fmt_num(c['score'])}</b> "
+                f"/ {kp.fmt_num(c['max_score'])}\n" if points_on() else "")
         messages.append((
             c["user_id"],
             f"🔄 <b>{escape(test['title'])}</b> — natijangiz yangilandi\n\n"
             "Test muallifi javoblar kalitini tuzatdi va barcha natijalar qayta hisoblandi.\n\n"
-            f"{arrow} Ball: {kp.fmt_num(c['old_score'])} → <b>{kp.fmt_num(c['score'])}</b> "
-            f"/ {kp.fmt_num(c['max_score'])}\n"
-            f"✅ To'g'ri javoblar: {c['old_correct']} → <b>{c['correct']}</b>\n\n"
+            + ball
+            + f"{'' if ball else arrow + ' '}To'g'ri javoblar: {c['old_correct']} → <b>{c['correct']}</b>\n\n"
             + ("<i>Reytingdagi o'rningiz ham o'zgargan bo'lishi mumkin. </i>"
                if finished and features.on("rating") else "")
             + ("<i>Avval sertifikat olgan bo'lsangiz, yangisini oling — eskisi endi amal qilmaydi.</i>"

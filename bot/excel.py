@@ -34,7 +34,8 @@ def _header(ws, titles: list[str]) -> None:
     ws.freeze_panes = "A2"
 
 
-def build_report(test: dict, subs: list[dict]) -> bytes:
+def build_report(test: dict, subs: list[dict], points: bool = True) -> bytes:
+    """points=False («Ball tizimi» o'chiq) - hisobotda ball ustunlari bo'lmaydi, foiz to'g'ri javoblardan."""
     questions = json.loads(test["questions"])
     n = len(questions)
     wb = Workbook()
@@ -42,54 +43,62 @@ def build_report(test: dict, subs: list[dict]) -> bytes:
     # 1-varaq: reyting
     ws = wb.active
     ws.title = "Reyting"
-    _header(ws, ["O'rin", "Ism familiya", "Username", "To'g'ri", "Ball", "Foiz", "Topshirgan vaqti"]
-            + [str(i) for i in range(1, n + 1)])
+    head = ["O'rin", "Ism familiya", "Username", "To'g'ri"] + (["Ball"] if points else []) + ["Foiz", "Topshirgan vaqti"]
+    first_answer_col = len(head) + 1
+    _header(ws, head + [str(i) for i in range(1, n + 1)])
     correct_per_q = [0] * n
     for pos, sub in enumerate(subs, start=1):
         answers = json.loads(sub["answers"])
         flags = kp.grade(questions, answers)["flags"]
-        pct = round(sub["score"] * 100 / sub["max_score"], 1) if sub["max_score"] else 0
+        if points:
+            pct = round(sub["score"] * 100 / sub["max_score"], 1) if sub["max_score"] else 0
+        else:
+            pct = round(sub["correct_count"] * 100 / n, 1) if n else 0
         ws.append(
-            [pos, _safe(sub["full_name"]), f"@{sub['username']}" if sub.get("username") else "",
-             sub["correct_count"], sub["score"], pct, to_local(sub["submitted_at"])]
+            [pos, _safe(sub["full_name"]), f"@{sub['username']}" if sub.get("username") else "", sub["correct_count"]]
+            + ([sub["score"]] if points else [])
+            + [pct, to_local(sub["submitted_at"])]
             + [_safe(kp.fmt_answer(a)) for a in answers]
         )
         row = ws.max_row
         for i, flag in enumerate(flags):
-            cell = ws.cell(row=row, column=8 + i)
+            cell = ws.cell(row=row, column=first_answer_col + i)
             cell.alignment = _CENTER
             cell.fill = _GREEN if flag == 1 else _RED if flag == 0 else _GRAY
             if flag == 1:
                 correct_per_q[i] += 1
-    for col, width in zip("ABCDEFG", (7, 30, 20, 9, 9, 8, 18)):
-        ws.column_dimensions[col].width = width
+    widths = [7, 30, 20, 9] + ([9] if points else []) + [8, 18]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
     for i in range(n):
-        ws.column_dimensions[get_column_letter(8 + i)].width = 6 if questions[i]["t"] == "c" else 14
+        ws.column_dimensions[get_column_letter(first_answer_col + i)].width = 6 if questions[i]["t"] == "c" else 14
 
     # 2-varaq: savollar tahlili
     ws2 = wb.create_sheet("Savollar tahlili")
-    _header(ws2, ["Savol", "Turi", "To'g'ri javob", "Ball", "To'g'ri javob berganlar", "Foiz"])
+    _header(ws2, ["Savol", "Turi", "To'g'ri javob"] + (["Ball"] if points else [])
+            + ["To'g'ri javob berganlar", "Foiz"])
     total = len(subs)
     for i, q in enumerate(questions):
         pct = round(correct_per_q[i] * 100 / total, 1) if total else 0
-        ws2.append([i + 1, "Variantli" if q["t"] == "c" else "Ochiq", _safe(kp.fmt_answer(q["a"])), q["p"],
-                    correct_per_q[i], pct])
-        ws2.cell(row=ws2.max_row, column=6).fill = _GREEN if pct >= 70 else _RED if pct < 40 else _GRAY
-    for col, width in zip("ABCDEF", (8, 12, 22, 8, 24, 8)):
-        ws2.column_dimensions[col].width = width
+        ws2.append([i + 1, "Variantli" if q["t"] == "c" else "Ochiq", _safe(kp.fmt_answer(q["a"]))]
+                   + ([q["p"]] if points else []) + [correct_per_q[i], pct])
+        ws2.cell(row=ws2.max_row, column=ws2.max_column).fill = _GREEN if pct >= 70 else _RED if pct < 40 else _GRAY
+    for i, width in enumerate([8, 12, 22] + ([8] if points else []) + [24, 8], start=1):
+        ws2.column_dimensions[get_column_letter(i)].width = width
 
     # 3-varaq: umumiy ma'lumot
     ws3 = wb.create_sheet("Umumiy")
-    scores = [s["score"] for s in subs]
+    values = [s["score"] if points else s["correct_count"] for s in subs]
+    unit = "ball" if points else "to'g'ri javob"
     info = [
         ("Test nomi", _safe(test["title"])),
         ("Test kodi", test["code"]),
         ("Savollar soni", n),
-        ("Maksimal ball", round(sum(q["p"] for q in questions), 2)),
+        *([("Maksimal ball", round(sum(q["p"] for q in questions), 2))] if points else []),
         ("Ishtirokchilar", total),
-        ("O'rtacha ball", round(sum(scores) / total, 2) if total else 0),
-        ("Eng yuqori ball", max(scores) if scores else 0),
-        ("Eng past ball", min(scores) if scores else 0),
+        (f"O'rtacha ({unit})", round(sum(values) / total, 2) if total else 0),
+        (f"Eng yuqori ({unit})", max(values) if values else 0),
+        (f"Eng past ({unit})", min(values) if values else 0),
         ("Yaratilgan", to_local(test["created_at"])),
         ("Yakunlangan", to_local(test["finished_at"])),
     ]

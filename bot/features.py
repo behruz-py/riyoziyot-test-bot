@@ -34,8 +34,9 @@ GROUPS = {
 
 FEATURES: list[Feature] = [
     # --- muallif
-    Feature("custom_points", "Savollarga alohida ball",
-            "Test yaratishda har bir savolga turli ball berish (1-10: 1.1 kabi). O'chiq bo'lsa — har bir savol 1 ball.",
+    Feature("points", "Ball tizimi",
+            "Natijalar, reyting va hisobotlarda ball ko'rsatiladi, test yaratishda savollarga alohida ball berish "
+            "mumkin (1-10: 1.1 kabi). O'chiq bo'lsa — hamma joyda faqat to'g'ri javoblar soni.",
             "author", basic=False),
     Feature("deadline", "Muddat belgilash",
             "Test yaratishda javob qabul qilish muddati; muddat tugagach test o'zi yakunlanadi.",

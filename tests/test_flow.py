@@ -277,12 +277,13 @@ async def features_check():
     assert "Hammasi to'g'ri bo'lsa, davom eting" in out and "ball tizimi" not in out, out
     assert last_markup_data() == ["cr:p:std"], last_markup_data()
     out = await cb(TEACHER, "cr:p:custom")  # eski tugma: ball tanlash o'chiq - oddiy davom etadi
-    assert "Hammasi to'g'rimi" in out and "Muddat" not in out and "har bir savol 1 ball" in out, out
+    assert "Hammasi to'g'rimi" in out and "Muddat" not in out and "ball" not in out.lower(), out
     out = await cb(TEACHER, "cr:back")  # muddat o'chiq: orqaga - kalit qadamiga
     assert "Kalit qabul qilindi" in out, out
     await cb(TEACHER, "cr:p:std")
     out = await cb(TEACHER, "cr:ok")
     assert "Test yaratildi" in out and "t:note:" in " ".join(last_markup_data()), out
+    assert "ball" not in out.lower(), out  # post va xabarlarda ball yo'q
     t3 = (await db.tests_by_owner(TEACHER, 1, 0))[0]
     assert t3["deadline"] is None and all(q["p"] == 1.0 for q in services.questions_of(t3))
 
@@ -305,6 +306,13 @@ async def features_check():
     assert "Javoblaringizni tekshiring" in out, out
     out = await cb(S1, "sv:ok")
     assert "O'rin" in out and f"rating:{t3['id']}" in last_markup_data(), out
+    assert "To'g'ri javoblar: <b>3 / 4</b> (75%)" in out and "ball" not in out.lower(), out
+    out = await cb(S1, f"rating:{t3['id']}")
+    assert "— <b>3</b> / 4 to'g'ri" in out and "ball" not in out.lower(), out
+    out = await msg(S1, kb.BTN_MY_RESULTS)
+    assert "ball" not in out.lower()
+    out = await msg(S1, t3["code"])  # avval yuborgan - natijasi qayta ko'rsatiladi
+    assert "ball" not in out.lower(), out
     assert f"cert:{t3['id']}" not in last_markup_data(), last_markup_data()
     start = len(session.calls)
     await cb(S1, f"cert:{t3['id']}")
@@ -335,7 +343,7 @@ async def features_check():
     for key in ("excel", "participants", "key_edit", "post_note"):
         await features.set_value(key, False)
     out = await cb(TEACHER, f"t:v:{t3['id']}")
-    assert "Muddat" not in out, out  # muddat funksiyasi o'chiq va testda muddat yo'q
+    assert "Muddat" not in out and "ball" not in out.lower(), out  # muddat va ball o'chiq
     data = last_markup_data()
     for hidden in ("t:xl:", "t:pl:", "t:ed:"):
         assert not any(d.startswith(hidden) for d in data), (hidden, data)
@@ -348,7 +356,9 @@ async def features_check():
     out = await cb(TEACHER, f"t:post:{t3['id']}")
     assert not any(d.startswith("t:note") for d in last_markup_data()) and "izohingizni" not in out, out
     out = await cb(TEACHER, f"t:res:{t3['id']}")
-    assert "Excel" not in out, out
+    assert "Excel" not in out and "O'rtacha natija" in out and "to'g'ri" in out and "ball" not in out.lower(), out
+    out = await cb(TEACHER, f"t:key:{t3['id']}")
+    assert "ball" not in out.lower(), out
 
     # --- yakunlash: natija xabari va Excel o'chiq, to'g'ri javoblar yashirin
     await features.set_value("finish_notify", False)
@@ -359,6 +369,30 @@ async def features_check():
     assert not sent_to(start, S1) and not sent_to(start, S2) and "SendDocument" not in names(start), names(start)
     out = await cb(S1, f"res:{t3['id']}")
     assert "Xato javoblar" in out and "to'g'ri: <code>" not in out and "ko'rinadi" not in out, out
+
+    # --- ball o'chiq: Excel va sertifikatda ball yo'q, kalit tahririda ham
+    from io import BytesIO
+    from openpyxl import load_workbook
+    await features.set_value("excel", True)
+    start = len(session.calls)
+    await cb(TEACHER, f"t:xl:{t3['id']}")
+    doc = [m for m in session.calls[start:] if type(m).__name__ == "SendDocument"][0].document.data
+    wb = load_workbook(BytesIO(doc))
+    headers = [c.value for c in wb["Reyting"][1]]
+    assert "Ball" not in headers and headers[:6] == ["O'rin", "Ism familiya", "Username", "To'g'ri", "Foiz",
+                                                     "Topshirgan vaqti"], headers
+    assert wb["Reyting"].cell(row=2, column=7).value == "A", "javoblar ustuni siljigan"
+    assert "Ball" not in [c.value for c in wb["Savollar tahlili"][1]]
+    assert not any("ball" in str(r[0].value).lower() for r in wb["Umumiy"].iter_rows()), "Umumiy varaqda ball bor"
+    await features.set_value("certificate", True)
+    start = len(session.calls)
+    await cb(S1, f"cert:{t3['id']}")
+    assert "SendPhoto" in names(start), names(start)
+    sub_s1 = await db.get_submission(t3["id"], S1)
+    out = await msg(S2, f"/start cert_{await certs.token(sub_s1['id'])}")
+    assert "Sertifikat haqiqiy" in out and "To'g'ri javoblar: <b>3 / 4</b> (75%)" in out and "Ball" not in out, out
+    await features.set_value("certificate", False)
+    await features.set_value("excel", False)
 
     # --- majburiy obuna va so'z filtri
     await db.add_channel(CHANNEL_ID, "Kanal", "https://t.me/kanal")
@@ -382,10 +416,15 @@ async def features_check():
     await msg(S3, kb.BTN_CANCEL)
     await db.set_full_name(S3, "Salimova Dilnoza")
 
-    # --- kalit tahririda ball tugmasi faqat alohida ball yoqilganda
+    # --- kalit tahririda ball tugmasi faqat ball tizimi yoqilganda
     await features.set_value("key_edit", True)
-    await cb(TEACHER, f"t:ed:{t2_id()}")
+    out = await cb(TEACHER, f"t:ed:{t2_id()}")
     assert not any(d.startswith("t:edk:points") for d in last_markup_data()), last_markup_data()
+    assert "ball" not in out.lower(), out
+    await cb(TEACHER, f"t:edk:fix:{t2_id()}")
+    out = await msg(TEACHER, "1 B")
+    assert "ishtirokchining natijasi o'zgaradi" in out and "ball" not in out.lower(), out
+    await cb(TEACHER, f"t:ed:{t2_id()}")
 
     out = await cb(ADMIN, "adm:ftp:full")
     assert "Rejim: <b>🔵 To'liq</b>" in out, out
@@ -805,7 +844,7 @@ async def scenario():
     assert "Ishtirokchilar: <b>3</b>" in out and "Faol" in out, out
     assert "home" in last_markup_data() and "mt:0" in last_markup_data()
     out = await cb(TEACHER, f"t:res:{tid}")
-    assert "O'rtacha ball" in out, out
+    assert "O'rtacha natija: <b>4.87</b> / 7.3 ball" in out, out
     start = len(session.calls)
     await cb(TEACHER, f"t:xl:{tid}")
     assert "SendDocument" in names(start)

@@ -44,7 +44,7 @@ def help_text() -> str:
     """Yordam matni - faqat yoqilgan funksiyalar haqida gapiradi."""
     confirm = features.on("confirm_submit")
     extras = [x for x, on in (
-        ("ball tizimi", features.on("custom_points")),
+        ("ball tizimi", features.on("points")),
         ("muddat", features.on("deadline")),
     ) if on]
     panel = ["natijalar"]

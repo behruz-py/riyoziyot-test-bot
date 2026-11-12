@@ -210,7 +210,7 @@ def build_certificate(
     *, name: str, title: str, correct: int, total_q: int, score: str, max_score: str, percent: float,
     rank: int | None, participants: int, date: str, number: str, tier: str,
     verify_url: str | None = None, org: str | None = None, signer: str | None = None,
-    signer_role: str | None = None, logo: bytes | None = None,
+    signer_role: str | None = None, logo: bytes | None = None, show_points: bool = True,
 ) -> tuple[bytes, bytes]:
     """(PNG, PDF) qaytaradi. rank - faqat yakunlangan testda (aks holda None)."""
     t = TIERS[tier]
@@ -267,8 +267,8 @@ def build_certificate(
     block_h = by
 
     # --- Ko'rsatkichlar qatori
-    stats = [(f"{score} / {max_score}", "ball"), (f"{percent:.1f}".rstrip("0").rstrip(".") + "%", "natija"),
-             (f"{correct} / {total_q}", "to'g'ri javoblar")]
+    stats = [(f"{score} / {max_score}", "ball")] if show_points else []
+    stats += [(f"{percent:.1f}".rstrip("0").rstrip(".") + "%", "natija"), (f"{correct} / {total_q}", "to'g'ri javoblar")]
     if rank is not None:
         stats.append((f"{rank} / {participants}", "o'rin"))
     stats_top, stats_h = 930, 126

@@ -31,8 +31,10 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 Admin panel → «🎛 Funksiyalar». Har bir funksiya alohida yoqiladi; o'chirilgani foydalanuvchilarga umuman ko'rinmaydi
 (tugmasi ham, yo'riqnomadagi tilga olinishi ham), mavjud ma'lumotlar esa o'chmaydi. Faqat bosh admin o'zgartiradi.
 
-- **🟢 Oddiy rejim** (birinchi ishga tushganda shu): sertifikat, alohida ballar, muddat va ochiq savollar o'chiq —
-  test yaratish 2 qadamdan iborat (nom va kalit).
+- **🟢 Oddiy rejim** (birinchi ishga tushganda shu): sertifikat, ball tizimi, muddat va ochiq savollar o'chiq —
+  test yaratish 2 qadamdan iborat (nom va kalit), natijalar faqat to'g'ri javoblar soni bilan ko'rsatiladi.
+- **Ball tizimi** o'chiq bo'lsa, botda (natija, reyting, post, Excel, sertifikat, xabarlar) ball umuman ko'rinmaydi;
+  har bir savol 1 ball hisoblanadi, shuning uchun reyting tartibi o'zgarmaydi.
 - **🔵 To'liq rejim**: hammasi yoqilgan.
 
 Yangi funksiya qo'shish: `bot/features.py` dagi `FEATURES` ro'yxatiga yozing va kodda `features.on("kalit")` bilan tekshiring.
