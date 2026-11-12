@@ -95,7 +95,7 @@ def help_text() -> str:
 NAME_ERROR = (
     "⚠️ Ism va familiya 3–60 belgidan iborat bo'lishi va <b>faqat harflardan</b> tashkil topishi kerak "
     "(raqam, belgi va emoji mumkin emas).\n\n"
-    "Qaytadan yozing (masalan: <i>Aliyev Vali</i>):"
+    "Qaytadan yozing (masalan: <i>Valijonov Rustamjon</i>):"
 )
 BAD_NAME_ERROR = (
     "⚠️ Bu ismni qabul qila olmaymiz.\n\n"
@@ -141,7 +141,7 @@ async def enter(bot: Bot, state: FSMContext, user) -> None:
             "Bu bot yordamida test javoblaringizni bir zumda tekshirasiz, natija va reytingni ko'rasiz, "
             "o'zingiz ham test o'tkaza olasiz.\n\n"
             "Boshlash uchun <b>ism va familiyangizni</b> yozing — u reyting va sertifikatda ko'rsatiladi.\n"
-            "<i>Masalan: Aliyev Vali</i>"
+            "<i>Masalan: Valijonov Rustamjon</i>"
             + ("\n\nYoki quyidagi tugmani bosib, Telegram'dagi ismingizni tanlang 👇" if suggestion else ""),
             reply_markup=keyboard,
         )

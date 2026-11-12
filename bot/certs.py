@@ -160,7 +160,7 @@ async def sample(bot: Bot) -> bytes:
     me = await bot.me()
     png, _ = await asyncio.to_thread(
         build_certificate,
-        name="Aliyev Vali", title="Namuna test", correct=27, total_q=30, score="27", max_score="30",
+        name="Valijonov Rustamjon", title="Namuna test", correct=27, total_q=30, score="27", max_score="30",
         percent=90.0, rank=1, participants=120, date=services.to_local(db.now_utc())[:10], number="00000-00000",
         tier="place1", verify_url=f"https://t.me/{me.username}", org=conf[KEY_ORG], signer=conf[KEY_SIGNER],
         signer_role=conf[KEY_ROLE], logo=await logo_bytes(bot), show_points=services.points_on(),
