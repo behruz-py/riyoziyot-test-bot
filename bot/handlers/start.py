@@ -11,7 +11,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from .. import certs, db, moderation
+from .. import certs, db, features, moderation
 from ..keyboards import BTN_BACK, BTN_CANCEL, BTN_HELP, BTN_PROFILE, cancel_kb, home_btn, main_menu
 from ..subscription import PENDING_START
 from . import solve
@@ -36,27 +36,61 @@ MENU_TEXT = (
     "Kerakli bo'limni tanlang 👇"
 )
 
-HELP_TEXT = (
-    "ℹ️ <b>Yordam</b>\n\n"
-    "<b>🧑‍🎓 Test javobini tekshirish</b>\n"
-    "1. «✅ Javobni tekshirish» tugmasini bosing\n"
-    "2. O'qituvchi bergan <b>test kodini</b> yuboring\n"
-    "3. Javoblaringizni yuboring: <code>1A2B3C4D</code> yoki <code>ABCDABCD</code>\n"
-    "4. Javoblarni ko'zdan kechirib, <b>«✅ Yuborish»</b>ni bosing\n\n"
-    "• Javob bermaydigan savolga <code>-</code> qo'ying\n"
-    "• Variantlar: <b>A, B, C, D</b> (katta-kichik harf farq qilmaydi)\n"
-    "• Tezkor usul: <code>12345*1A2B3C4D</code> (kod*javoblar)\n"
-    "• Har bir testga faqat <b>bir marta</b> javob yuboriladi\n"
-    "• To'g'ri javoblar test yakunlangach ochiladi\n\n"
-    "<b>👨‍🏫 Test yaratish</b>\n"
-    "1. «➕ Test yaratish» → test nomi\n"
-    "2. To'g'ri javoblar kaliti: <code>1A2B3C4D</code>\n"
-    "3. Ball tizimi va muddat (ixtiyoriy)\n"
-    "4. Bot bergan <b>test kodini</b> o'quvchilarga tarqating\n\n"
-    "Natijalar, Excel hisobot va testni yakunlash — «📚 Mening testlarim» bo'limida.\n\n"
-    "<b>🧭 Adashib qolsangiz</b>\n"
-    "«❌ Bekor qilish» yoki /start — istalgan joydan asosiy menyuga qaytaradi."
-)
+def _first_upper(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def help_text() -> str:
+    """Yordam matni - faqat yoqilgan funksiyalar haqida gapiradi."""
+    confirm = features.on("confirm_submit")
+    extras = [x for x, on in (
+        ("ball tizimi", features.on("custom_points")),
+        ("muddat", features.on("deadline")),
+    ) if on]
+    panel = ["natijalar"]
+    if features.on("excel"):
+        panel.append("Excel hisobot")
+    if features.on("key_edit"):
+        panel.append("kalitni tahrirlash")
+    panel.append("testni yakunlash")
+    lines = [
+        "ℹ️ <b>Yordam</b>",
+        "",
+        "<b>🧑‍🎓 Test javobini tekshirish</b>",
+        "1. «✅ Javobni tekshirish» tugmasini bosing",
+        "2. O'qituvchi bergan <b>test kodini</b> yuboring",
+        "3. Javoblaringizni yuboring: <code>1A2B3C4D</code> yoki <code>ABCDABCD</code>",
+    ]
+    if confirm:
+        lines.append("4. Javoblarni ko'zdan kechirib, <b>«✅ Yuborish»</b>ni bosing")
+    lines += [
+        "",
+        "• Javob bermaydigan savolga <code>-</code> qo'ying",
+        "• Variantlar: <b>A, B, C, D</b> (katta-kichik harf farq qilmaydi)",
+        "• Tezkor usul: <code>12345*1A2B3C4D</code> (kod*javoblar)",
+        "• Har bir testga faqat <b>bir marta</b> javob yuboriladi",
+    ]
+    if features.on("show_answers"):
+        lines.append("• To'g'ri javoblar test yakunlangach ochiladi")
+    lines += [
+        "",
+        "<b>👨‍🏫 Test yaratish</b>",
+        "1. «➕ Test yaratish» → test nomi",
+        "2. To'g'ri javoblar kaliti: <code>1A2B3C4D</code>",
+    ]
+    step = 3
+    if extras:
+        lines.append(f"{step}. {_first_upper(' va '.join(extras))} (ixtiyoriy)")
+        step += 1
+    lines += [
+        f"{step}. Bot bergan tayyor postni o'quvchilarga forward qiling",
+        "",
+        f"{_first_upper(', '.join(panel))} — «📚 Mening testlarim» bo'limida.",
+        "",
+        "<b>🧭 Adashib qolsangiz</b>",
+        "«❌ Bekor qilish» yoki /start — istalgan joydan asosiy menyuga qaytaradi.",
+    ]
+    return "\n".join(lines)
 
 NAME_ERROR = (
     "⚠️ Ism va familiya 3–60 belgidan iborat bo'lishi va <b>faqat harflardan</b> tashkil topishi kerak "
@@ -202,7 +236,7 @@ async def help_cmd(message: Message, user) -> None:
         InlineKeyboardButton(text="✅ Javobni tekshirish", callback_data="go:check"),
         InlineKeyboardButton(text="➕ Test yaratish", callback_data="go:create"),
     ]])
-    await message.answer(HELP_TEXT, reply_markup=kb)
+    await message.answer(help_text(), reply_markup=kb)
 
 
 @router.message(F.text == BTN_PROFILE)

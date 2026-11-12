@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from datetime import datetime, timedelta
 
-from .. import admins, certs, daily, db, keyparser as kp, moderation, services, subscription
+from .. import admins, certs, daily, db, features, keyparser as kp, moderation, services, subscription
 from ..config import ADMIN_IDS, TZ, is_admin
 from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, home_btn, main_menu
 
@@ -38,6 +38,7 @@ class Admin(StatesGroup):
 
 
 PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="🎛 Funksiyalar (yoqish / o'chirish)", callback_data="adm:ft")],
     [InlineKeyboardButton(text="📊 Statistika", callback_data="adm:stats")],
     [InlineKeyboardButton(text="📢 Xabar tarqatish", callback_data="adm:bc"),
      InlineKeyboardButton(text="📌 Pinni olib tashlash", callback_data="adm:unpin")],
@@ -920,3 +921,75 @@ async def alert_test(message: Message) -> None:
         "✅ Sinov xatosi yaratildi. Bir necha soniyada sizga «🚨 Botda xatolik» xabari kelishi kerak.\n\n"
         "<i>Botda haqiqiy xato chiqqanda xuddi shunday xabar keladi: qayerda, kimda va nima sababdan.</i>"
     )
+
+
+# ---------------------------------------------------------------- funksiyalarni yoqish / o'chirish
+def _features_view(viewer_id: int):
+    can_edit = admins.is_super(viewer_id)
+    lines = [
+        "🎛 <b>Funksiyalar</b>",
+        f"Rejim: <b>{features.mode()}</b>",
+        "",
+        "Botda qaysi imkoniyatlar ishlashini tanlang. O'chirilgan funksiya foydalanuvchilarga <b>umuman "
+        "ko'rinmaydi</b> (tugmasi ham, yo'riqnomadagi tilga olinishi ham), yoqilsa — darhol paydo bo'ladi. "
+        "Ma'lumotlar o'chmaydi.",
+    ]
+    kb = InlineKeyboardBuilder()
+    for group, title in features.GROUPS.items():
+        lines += ["", f"<b>{title}</b>"]
+        row = []
+        for f in (f for f in features.FEATURES if f.group == group):
+            mark = "✅" if features.on(f.key) else "⬜️"
+            lines.append(f"{mark} <b>{f.title}</b> — {f.description}")
+            row.append(InlineKeyboardButton(text=f"{mark} {f.title}", callback_data=f"adm:ft:{f.key}"))
+        for k in range(0, len(row), 2):
+            kb.row(*row[k:k + 2])
+    lines += [
+        "",
+        "<i>🟢 Oddiy rejim — faqat asosiy funksiyalar: bot yangi foydalanuvchilar uchun sodda va tushunarli. "
+        "🔵 To'liq rejim — hammasi yoqilgan.</i>",
+    ]
+    if not can_edit:
+        lines += ["", "Funksiyalarni faqat bosh admin o'zgartira oladi."]
+    kb.row(InlineKeyboardButton(text="🟢 Oddiy rejim", callback_data="adm:ftp:basic"),
+           InlineKeyboardButton(text="🔵 To'liq rejim", callback_data="adm:ftp:full"))
+    kb.row(InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel"))
+    return "\n".join(lines), kb.as_markup()
+
+
+@router.callback_query(F.data == "adm:ft")
+async def features_list(callback: CallbackQuery) -> None:
+    text, kb = _features_view(callback.from_user.id)
+    await services.edit_or_send(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ft:"))
+async def feature_toggle(callback: CallbackQuery) -> None:
+    if not admins.is_super(callback.from_user.id):
+        await callback.answer("Funksiyalarni faqat bosh admin o'zgartira oladi.", show_alert=True)
+        return
+    key = callback.data.split(":", 2)[2]
+    if key not in features.BY_KEY:
+        await callback.answer()
+        return
+    value = not features.on(key)
+    await features.set_value(key, value)
+    await callback.answer(f"{features.BY_KEY[key].title}: {'yoqildi ✅' if value else 'o‘chirildi ⬜️'}")
+    text, kb = _features_view(callback.from_user.id)
+    await services.edit_or_send(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("adm:ftp:"))
+async def feature_preset(callback: CallbackQuery) -> None:
+    if not admins.is_super(callback.from_user.id):
+        await callback.answer("Funksiyalarni faqat bosh admin o'zgartira oladi.", show_alert=True)
+        return
+    preset = callback.data.split(":")[2]
+    if preset not in ("basic", "full"):
+        await callback.answer()
+        return
+    await features.apply_preset(preset)
+    await callback.answer("🟢 Oddiy rejim yoqildi" if preset == "basic" else "🔵 To'liq rejim yoqildi")
+    text, kb = _features_view(callback.from_user.id)
+    await services.edit_or_send(callback, text, kb)

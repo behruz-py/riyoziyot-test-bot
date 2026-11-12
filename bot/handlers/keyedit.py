@@ -13,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import db, keyparser as kp, services
+from .. import db, features, keyparser as kp, services
 from ..config import is_admin
 from ..keyboards import cancel_kb, main_menu
 
@@ -35,6 +35,9 @@ KIND_STATES = {"fix": KeyEdit.fix, "full": KeyEdit.full, "points": KeyEdit.point
 
 async def _load(bot: Bot, user, test_id: int):
     """Testni qaytaradi (faqat muallif yoki admin uchun), aks holda foydalanuvchiga tushuntiradi."""
+    if not features.on("key_edit"):
+        await bot.send_message(user["id"], features.OFF_TEXT, reply_markup=main_menu(user["id"]))
+        return None
     test = await db.get_test(test_id)
     if test is None:
         await bot.send_message(user["id"], "❌ Test topilmadi — o'chirilgan bo'lishi mumkin.",
@@ -78,7 +81,8 @@ async def _menu(callback: CallbackQuery, state: FSMContext, user, test_id: int) 
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🎯 Ayrim savollarni tuzatish", callback_data=f"t:edk:fix:{tid}"))
     kb.row(InlineKeyboardButton(text="🔁 Butun kalitni qayta kiritish", callback_data=f"t:edk:full:{tid}"))
-    kb.row(InlineKeyboardButton(text="⚖️ Ballarni o'zgartirish", callback_data=f"t:edk:points:{tid}"))
+    if features.on("custom_points"):
+        kb.row(InlineKeyboardButton(text="⚖️ Ballarni o'zgartirish", callback_data=f"t:edk:points:{tid}"))
     kb.row(InlineKeyboardButton(text="⬅️ Testga qaytish", callback_data=f"t:v:{tid}"))
     await callback.answer()
     await services.send_long(callback.bot, user["id"], lines, reply_markup=kb.as_markup())
@@ -128,6 +132,9 @@ async def _ask(bot: Bot, user_id: int, state: FSMContext, test, kind: str) -> No
 async def edit_kind(callback: CallbackQuery, state: FSMContext, user) -> None:
     _, _, kind, test_id = callback.data.split(":")
     test = await _load(callback.bot, user, int(test_id))
+    if kind == "points" and not features.on("custom_points"):
+        await callback.answer(features.OFF_TEXT, show_alert=True)
+        return
     if test is None or kind not in KIND_STATES:
         await callback.answer("Bu test sizga tegishli emas.", show_alert=True)
         return
@@ -150,7 +157,7 @@ async def got_fix(message: Message, state: FSMContext, user) -> None:
         return
     questions = services.questions_of(test)
     try:
-        corrections = kp.parse_corrections(message.text, len(questions))
+        corrections = kp.parse_corrections(message.text, len(questions), allow_open=features.on("open_questions"))
     except kp.ParseError as e:
         await message.answer(f"⚠️ {e}\n\nQaytadan yuboring 👇")
         return
@@ -165,7 +172,7 @@ async def got_full(message: Message, state: FSMContext, user) -> None:
     questions = services.questions_of(test)
     try:
         answers = kp.parse_answers(message.text)
-        kp.build_questions(answers)  # bo'sh yoki "-" javoblarni tekshirish
+        kp.build_questions(answers, allow_open=features.on("open_questions"))  # A-D va bo'sh javoblarni tekshirish
     except kp.ParseError as e:
         await message.answer(f"⚠️ {e}\n\nQaytadan yuboring 👇")
         return

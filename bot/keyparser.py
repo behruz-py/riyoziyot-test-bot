@@ -95,15 +95,21 @@ def parse_answers(text: str) -> list[str]:
     return answers
 
 
-def build_questions(answers: list[str]) -> list[dict]:
-    """Kalit javoblaridan savollar ro'yxatini tuzadi: {"t": "c", "a": javob, "p": ball}."""
+def build_questions(answers: list[str], allow_open: bool = False) -> list[dict]:
+    """Kalit javoblaridan savollar ro'yxatini tuzadi: {"t": "c"|"o", "a": javob, "p": ball}.
+
+    allow_open=False (standart): faqat A-D. True: boshqa qiymatlar ochiq (yozma javobli) savol bo'ladi.
+    """
     questions = []
     for i, a in enumerate(answers, start=1):
         if a == SKIP or not a.strip("| "):
             raise ParseError(f"{i}-savolning to'g'ri javobi ko'rsatilmagan.")
-        if not (len(a) == 1 and a in LETTERS):
+        if len(a) == 1 and a in LETTERS:
+            questions.append({"t": "c", "a": a, "p": 1.0})
+        elif allow_open:
+            questions.append({"t": "o", "a": a, "p": 1.0})
+        else:
             raise ParseError(_not_option(i, a))
-        questions.append({"t": "c", "a": a, "p": 1.0})
     return questions
 
 
@@ -117,7 +123,7 @@ def _not_option(num: int, answer: str) -> str:
 _RE_CORRECTION = re.compile(r"^(\d+)\s*[.):=]?\s*(\S.*)$", re.S)
 
 
-def parse_corrections(text: str, n: int) -> dict[int, str]:
+def parse_corrections(text: str, n: int, allow_open: bool = False) -> dict[int, str]:
     """Alohida savollarni tuzatish: har qatorda (yoki ";" bilan) "5 B", "5. B", "5B", "7 = D".
 
     Qaytaradi: {savol raqami (1 dan): yangi to'g'ri javob}.
@@ -147,7 +153,10 @@ def parse_corrections(text: str, n: int) -> dict[int, str]:
                 "variantlar faqat <b>A, B, C, D</b>."
             )
         if not (len(answer) == 1 and answer in LETTERS):
-            raise ParseError(_not_option(num, answer))
+            if not allow_open:
+                raise ParseError(_not_option(num, answer))
+            if len(answer) > MAX_OPEN_ANSWER_LEN:
+                raise ParseError(f"{num}-savolning javobi juda uzun (ko'pi bilan {MAX_OPEN_ANSWER_LEN} belgi).")
         result[num] = answer
     return result
 

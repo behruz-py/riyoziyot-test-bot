@@ -26,6 +26,17 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
   2. Test muallifi: «👥 Ishtirokchilar» bo'limida istalgan ishtirokchini reytingdan chiqaradi yoki adminga shikoyat yuboradi.
   3. Admin: bloklash (barcha reytinglardan yo'qoladi) yoki ismini bekor qilish (qayta ro'yxatdan o'tadi).
 
+## Funksiyalarni yoqish / o'chirish
+
+Admin panel → «🎛 Funksiyalar». Har bir funksiya alohida yoqiladi; o'chirilgani foydalanuvchilarga umuman ko'rinmaydi
+(tugmasi ham, yo'riqnomadagi tilga olinishi ham), mavjud ma'lumotlar esa o'chmaydi. Faqat bosh admin o'zgartiradi.
+
+- **🟢 Oddiy rejim** (birinchi ishga tushganda shu): sertifikat, alohida ballar, muddat va ochiq savollar o'chiq —
+  test yaratish 2 qadamdan iborat (nom va kalit).
+- **🔵 To'liq rejim**: hammasi yoqilgan.
+
+Yangi funksiya qo'shish: `bot/features.py` dagi `FEATURES` ro'yxatiga yozing va kodda `features.on("kalit")` bilan tekshiring.
+
 ## O'rnatish
 
 ```powershell

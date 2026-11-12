@@ -22,7 +22,7 @@ from aiogram.types import (  # noqa: E402
 )
 
 from bot import admins, backup, certs, config, daily, db, keyboards as kb, services  # noqa: E402
-from bot import alerts, antiflood, subscription  # noqa: E402
+from bot import alerts, antiflood, features, subscription  # noqa: E402
 from bot.__main__ import build_dispatcher  # noqa: E402
 from bot.handlers import admin as admin_h, create as create_h, mytests as mytests_h  # noqa: E402
 from bot.handlers import keyedit as keyedit_h, solve as solve_h, start as start_h  # noqa: E402
@@ -145,6 +145,20 @@ def last_post_url() -> str | None:
     return None
 
 
+def last_reply_keyboard() -> list[str]:
+    """Oxirgi yuborilgan pastki (reply) klaviatura tugmalari."""
+    for m in reversed(session.calls):
+        rm = getattr(m, "reply_markup", None)
+        if rm is not None and hasattr(rm, "keyboard"):
+            return [b.text for row in rm.keyboard for b in row]
+    return []
+
+
+def last_answer_text(start: int) -> str:
+    answers = [m for m in session.calls[start:] if type(m).__name__ == "AnswerCallbackQuery"]
+    return answers[-1].text or "" if answers else ""
+
+
 def last_markup_data() -> list[str]:
     """Oxirgi yuborilgan inline klaviaturadagi callback_data lar."""
     for m in reversed(session.calls):
@@ -184,7 +198,13 @@ async def main():
     target = os.getenv("TEST_DATABASE_URL") or Path(tempfile.mkdtemp()) / "test.db"
     await db.init(target)
     try:
+        await features.load()
+        assert features.mode() == "🟢 Oddiy", "yangi bazada oddiy rejim bo'lishi kerak"
+        assert not features.on("certificate") and not features.on("deadline") and features.on("rating")
+        await features.apply_preset("full")  # asosiy ssenariy barcha funksiyalarni sinaydi...
+        await features.set_value("open_questions", False)  # ...faqat A-D savollar bilan
         await scenario()
+        await features_check()
         await webhook_check()
         await alerts_check()
         await flood_check()
@@ -236,6 +256,157 @@ def sent_to(start: int, chat_id: int) -> str:
         m.text for m in session.calls[start:]
         if type(m).__name__ == "SendMessage" and m.chat_id == chat_id and isinstance(m.text, str)
     )
+
+
+async def features_check():
+    """Admin paneldan funksiyalarni yoqish/o'chirish: o'chirilgan funksiya ko'rinmaydi va ishlamaydi."""
+    OFF = features.OFF_TEXT
+
+    # --- admin ekrani
+    out = await cb(ADMIN, "adm:ft")
+    assert "Funksiyalar" in out and "Rejim: <b>🟡 Maxsus</b>" in out and "adm:ft:certificate" in last_markup_data(), out
+    out = await cb(ADMIN, "adm:ftp:full")
+    assert "Rejim: <b>🔵 To'liq</b>" in out, out
+    start = len(session.calls)
+    await cb(S1, "adm:ft:certificate")  # oddiy foydalanuvchi
+    assert features.on("certificate") and "Funksiyalar" not in texts(start), texts(start)
+    out = await cb(ADMIN, "adm:ft:certificate")
+    assert not features.on("certificate") and "Rejim: <b>🟡 Maxsus</b>" in out and "⬜️ <b>Sertifikat</b>" in out, out
+    await features.load()  # qayta ishga tushganda bazadan o'qiladi
+    assert not features.on("certificate")
+    out = await cb(ADMIN, "adm:ftp:basic")
+    assert "Rejim: <b>🟢 Oddiy</b>" in out, out
+
+    # --- oddiy rejimda test yaratish: faqat 2 qadam
+    out = await msg(TEACHER, kb.BTN_CREATE)
+    assert "1-qadam (2 tadan)" in out, out
+    out = await msg(TEACHER, "Oddiy test")
+    assert "2-qadam (2 tadan)" in out and "Ochiq" not in out, out
+    out = await msg(TEACHER, "1. a\n2. 12.5")
+    assert "A, B, C yoki D" in out, out
+    out = await msg(TEACHER, "ABCD")
+    assert "Hammasi to'g'ri bo'lsa, davom eting" in out and "ball tizimi" not in out, out
+    assert last_markup_data() == ["cr:p:std"], last_markup_data()
+    out = await cb(TEACHER, "cr:p:custom")  # eski tugma: ball tanlash o'chiq - oddiy davom etadi
+    assert "Hammasi to'g'rimi" in out and "Muddat" not in out and "har bir savol 1 ball" in out, out
+    out = await cb(TEACHER, "cr:back")  # muddat o'chiq: orqaga - kalit qadamiga
+    assert "Kalit qabul qilindi" in out, out
+    await cb(TEACHER, "cr:p:std")
+    out = await cb(TEACHER, "cr:ok")
+    assert "Test yaratildi" in out and "t:note:" in " ".join(last_markup_data()), out
+    t3 = (await db.tests_by_owner(TEACHER, 1, 0))[0]
+    assert t3["deadline"] is None and all(q["p"] == 1.0 for q in services.questions_of(t3))
+
+    # --- ochiq savollarni yoqish
+    await features.set_value("open_questions", True)
+    await msg(TEACHER, kb.BTN_CREATE)
+    out = await msg(TEACHER, "Ochiq test")
+    assert "Ochiq (yozma) javobli savollar" in out, out
+    out = await msg(TEACHER, "1. a\n2. 12.5")
+    assert "2 ta savol (variantli: 1, ochiq: 1)" in out, out
+    await msg(TEACHER, kb.BTN_CANCEL)
+    await features.set_value("open_questions", False)
+
+    # --- menyu, yordam, natija (oddiy rejim: reyting bor, sertifikat yo'q)
+    out = await msg(S1, kb.BTN_HELP)
+    assert "Ball tizimi" not in out and "(ixtiyoriy)" not in out and "Natijalar, Excel hisobot" in out, out
+    await msg(S1, "/start")
+    assert kb.BTN_RATING in last_reply_keyboard(), last_reply_keyboard()
+    out = await msg(S1, f"{t3['code']}*ABCA")
+    assert "Javoblaringizni tekshiring" in out, out
+    out = await cb(S1, "sv:ok")
+    assert "O'rin" in out and f"rating:{t3['id']}" in last_markup_data(), out
+    assert f"cert:{t3['id']}" not in last_markup_data(), last_markup_data()
+    start = len(session.calls)
+    await cb(S1, f"cert:{t3['id']}")
+    assert last_answer_text(start) == OFF and "SendPhoto" not in names(start)
+
+    # --- reyting o'chiq
+    await features.set_value("rating", False)
+    out = await msg(S1, "/start")
+    assert kb.BTN_RATING not in last_reply_keyboard(), last_reply_keyboard()
+    out = await msg(S1, kb.BTN_RATING)
+    assert OFF in out, out
+    start = len(session.calls)
+    await cb(S1, f"rating:{t3['id']}")
+    assert last_answer_text(start) == OFF and "SendMessage" not in names(start), names(start)
+    out = await cb(S1, f"res:{t3['id']}")
+    assert "O'rin" not in out and f"rating:{t3['id']}" not in last_markup_data(), out
+    out = await cb(TEACHER, f"rating:{t3['id']}")  # muallif ko'raveradi
+    assert "Aliyev" in out, out
+
+    # --- tasdiqlashsiz yuborish
+    await features.set_value("confirm_submit", False)
+    out = await msg(S2, t3["code"])
+    assert "faqat <b>bir marta</b>" in out and "ko'rib chiqish" not in out, out
+    out = await msg(S2, "ABCD")
+    assert "qabul qilindi" in out and "Javoblaringizni tekshiring" not in out, out
+
+    # --- muallif paneli: Excel, ishtirokchilar, kalitni tahrirlash, izoh
+    for key in ("excel", "participants", "key_edit", "post_note"):
+        await features.set_value(key, False)
+    out = await cb(TEACHER, f"t:v:{t3['id']}")
+    assert "Muddat" not in out, out  # muddat funksiyasi o'chiq va testda muddat yo'q
+    data = last_markup_data()
+    for hidden in ("t:xl:", "t:pl:", "t:ed:"):
+        assert not any(d.startswith(hidden) for d in data), (hidden, data)
+    for action in (f"t:xl:{t3['id']}", f"t:pl:{t3['id']}:0", f"t:pu:{t3['id']}:{S1}", f"t:note:{t3['id']}"):
+        start = len(session.calls)
+        await cb(TEACHER, action)
+        assert last_answer_text(start) == OFF, (action, last_answer_text(start))
+    out = await cb(TEACHER, f"t:ed:{t3['id']}")
+    assert OFF in out, out
+    out = await cb(TEACHER, f"t:post:{t3['id']}")
+    assert not any(d.startswith("t:note") for d in last_markup_data()) and "izohingizni" not in out, out
+    out = await cb(TEACHER, f"t:res:{t3['id']}")
+    assert "Excel" not in out, out
+
+    # --- yakunlash: natija xabari va Excel o'chiq, to'g'ri javoblar yashirin
+    await features.set_value("finish_notify", False)
+    await features.set_value("show_answers", False)
+    start = len(session.calls)
+    await cb(TEACHER, f"t:finok:{t3['id']}")
+    await settle()
+    assert not sent_to(start, S1) and not sent_to(start, S2) and "SendDocument" not in names(start), names(start)
+    out = await cb(S1, f"res:{t3['id']}")
+    assert "Xato javoblar" in out and "to'g'ri: <code>" not in out and "ko'rinadi" not in out, out
+
+    # --- majburiy obuna va so'z filtri
+    await db.add_channel(CHANNEL_ID, "Kanal", "https://t.me/kanal")
+    subscription.invalidate()
+    session.subscribed.discard(S3)
+    out = await msg(S3, kb.BTN_HELP)
+    assert "obuna bo'ling" in out, out
+    await features.set_value("subscription", False)
+    out = await msg(S3, kb.BTN_HELP)
+    assert "Yordam</b>" in out, out
+    await db.delete_channel((await db.get_channels())[0]["id"])
+    subscription.invalidate()
+    await features.set_value("word_filter", False)
+    await cb(S3, "profile:name")
+    out = await msg(S3, "Eshak Eshakov")
+    assert "saqlandi" in out, out
+    await features.set_value("word_filter", True)
+    await cb(S3, "profile:name")
+    out = await msg(S3, "Eshak Eshakov")
+    assert "qabul qila olmaymiz" in out, out
+    await msg(S3, kb.BTN_CANCEL)
+    await db.set_full_name(S3, "Salimova Dilnoza")
+
+    # --- kalit tahririda ball tugmasi faqat alohida ball yoqilganda
+    await features.set_value("key_edit", True)
+    await cb(TEACHER, f"t:ed:{t2_id()}")
+    assert not any(d.startswith("t:edk:points") for d in last_markup_data()), last_markup_data()
+
+    out = await cb(ADMIN, "adm:ftp:full")
+    assert "Rejim: <b>🔵 To'liq</b>" in out, out
+
+
+def t2_id() -> int:
+    return _t2_id[0]
+
+
+_t2_id = [0]
 
 
 async def alerts_check():
@@ -366,7 +537,7 @@ async def daily_and_backup_check():
         return
     data = await backup.dump()
     before = backup.summary(data)
-    assert before["users"] == 6 and before["tests"] == 1 and before["submissions"] == 1, before
+    assert before["users"] == 6 and before["tests"] == 2 and before["submissions"] == 3, before
     try:
         await backup.restore(data)
         raise AssertionError("bo'sh bo'lmagan bazaga tiklashga ruxsat berildi")
@@ -903,6 +1074,7 @@ async def scenario():
     assert "gacha" in out
     await cb(TEACHER, "cr:ok")
     t2 = (await db.tests_by_owner(TEACHER, 10, 0))[0]
+    _t2_id[0] = t2["id"]
     out = await msg(S1, f"{t2['code']}*abca")
     assert "1A  2B  3C  4A" in out, out
     out = await cb(S1, "sv:ok")

@@ -11,7 +11,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import BufferedInputFile, CallbackQuery
 
-from . import db, keyparser as kp
+from . import db, features, keyparser as kp
 from .config import TZ
 from .keyboards import result_kb
 
@@ -116,6 +116,15 @@ def answers_preview(answers: list[str]) -> list[str]:
     return [f"{i}) <code>{escape(kp.fmt_answer(a))}</code>" for i, a in enumerate(answers, start=1)]
 
 
+def questions_count(questions: list[dict], noun: bool = False) -> str:
+    """«30 ta» (noun=True: «30 ta savol»); ochiq savollar bo'lsa «30 ta (variantli: 28, ochiq: 2)»."""
+    base = f"{len(questions)} ta" + (" savol" if noun else "")
+    open_count = sum(1 for q in questions if q["t"] == "o")
+    if not open_count:
+        return base
+    return f"{base} (variantli: {len(questions) - open_count}, ochiq: {open_count})"
+
+
 def points_summary(questions: list[dict]) -> str:
     values = sorted({q["p"] for q in questions})
     total = kp.fmt_num(sum(q["p"] for q in questions))
@@ -160,10 +169,11 @@ def result_lines(test, sub, rank: int, total: int) -> list[str]:
         f"✅ To'g'ri javoblar: <b>{sub['correct_count']} / {len(questions)}</b>",
         f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b> "
         f"({percent(sub['score'], sub['max_score'])}%)",
-        f"🏅 O'rin: <b>{rank} / {total}</b> ({'yakuniy' if finished else 'hozircha'})",
-        f"🕒 Topshirilgan: {to_local(sub['submitted_at'])}",
-        "",
     ]
+    if features.on("rating"):
+        lines.append(f"🏅 O'rin: <b>{rank} / {total}</b> ({'yakuniy' if finished else 'hozircha'})")
+    lines += [f"🕒 Topshirilgan: {to_local(sub['submitted_at'])}", ""]
+    reveal = finished and features.on("show_answers")
     wrong = [i for i, f in enumerate(res["flags"]) if f == 0]
     skipped = [i for i, f in enumerate(res["flags"]) if f == -1]
     if not wrong and not skipped:
@@ -173,16 +183,16 @@ def result_lines(test, sub, rank: int, total: int) -> list[str]:
         lines.append(f"❌ <b>Xato javoblar ({len(wrong)} ta):</b>")
         for i in wrong:
             line = f"{i + 1}) siz: <code>{escape(kp.fmt_answer(answers[i]))}</code>"
-            if finished:
+            if reveal:
                 line += f" → to'g'ri: <code>{escape(kp.fmt_answer(questions[i]['a']))}</code>"
             lines.append(line)
     if skipped:
         lines.append(f"⚪️ <b>Javobsiz ({len(skipped)} ta):</b> " + ", ".join(str(i + 1) for i in skipped))
-        if finished:
+        if reveal:
             lines += [
                 f"{i + 1}) to'g'ri: <code>{escape(kp.fmt_answer(questions[i]['a']))}</code>" for i in skipped
             ]
-    if not finished:
+    if not finished and features.on("show_answers"):
         lines += ["", "ℹ️ To'g'ri javoblar test yakunlangach «📊 Natijalarim» bo'limida ko'rinadi."]
     return lines
 
@@ -212,7 +222,7 @@ async def finish_and_notify(bot: Bot, test_id: int, auto: bool = False) -> bool:
     try:
         head = "⏰ Muddat tugadi — test avtomatik yakunlandi." if auto else "🏁 Test yakunlandi."
         await send_long(bot, test["owner_id"], [head, ""] + ranking_lines(test, subs[:30], len(subs)))
-        if subs:
+        if subs and features.on("excel"):
             from .excel import build_report  # og'ir import faqat kerak bo'lganda
 
             data = await asyncio.to_thread(build_report, dict(test), [dict(s) for s in subs])
@@ -223,8 +233,8 @@ async def finish_and_notify(bot: Bot, test_id: int, auto: bool = False) -> bool:
             )
     except TelegramAPIError as e:
         log.warning("Muallifga hisobot yuborilmadi (test %s): %s", test_id, e)
-    if subs:
-        spawn(_notify_participants(bot, test, subs))
+    if subs and features.on("finish_notify"):
+        spawn(_notify_participants(bot, test, [s for s in subs]))
     return True
 
 
@@ -250,14 +260,17 @@ async def send_many(bot: Bot, messages: list[tuple[int, str]], reply_markup=None
 
 async def _notify_participants(bot: Bot, test, subs: list) -> None:
     total = len(subs)
-    messages = [
-        (sub["user_id"],
-         f"🏁 <b>{escape(test['title'])}</b> testi yakunlandi!\n\n"
-         f"🏅 Yakuniy o'rningiz: <b>{pos} / {total}</b>\n"
-         f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b>\n\n"
-         "To'g'ri javoblarni «📊 Natijalarim» bo'limida ko'rishingiz mumkin.")
-        for pos, sub in enumerate(subs, start=1)
-    ]
+    rating = features.on("rating")
+    answers = features.on("show_answers")
+    messages = []
+    for pos, sub in enumerate(subs, start=1):
+        text = f"🏁 <b>{escape(test['title'])}</b> testi yakunlandi!\n\n"
+        if rating:
+            text += f"🏅 Yakuniy o'rningiz: <b>{pos} / {total}</b>\n"
+        text += f"💯 Ball: <b>{kp.fmt_num(sub['score'])} / {kp.fmt_num(sub['max_score'])}</b>"
+        if answers:
+            text += "\n\nTo'g'ri javoblarni «📊 Natijalarim» bo'limida ko'rishingiz mumkin."
+        messages.append((sub["user_id"], text))
     await send_many(bot, messages, reply_markup=result_kb(test["id"]))
 
 
@@ -318,8 +331,10 @@ async def notify_regrade(bot: Bot, test, changes: list[dict]) -> int:
             f"{arrow} Ball: {kp.fmt_num(c['old_score'])} → <b>{kp.fmt_num(c['score'])}</b> "
             f"/ {kp.fmt_num(c['max_score'])}\n"
             f"✅ To'g'ri javoblar: {c['old_correct']} → <b>{c['correct']}</b>\n\n"
-            + ("<i>Reytingdagi o'rningiz ham o'zgargan bo'lishi mumkin. </i>" if finished else "")
-            + "<i>Avval sertifikat olgan bo'lsangiz, yangisini oling — eskisi endi amal qilmaydi.</i>",
+            + ("<i>Reytingdagi o'rningiz ham o'zgargan bo'lishi mumkin. </i>"
+               if finished and features.on("rating") else "")
+            + ("<i>Avval sertifikat olgan bo'lsangiz, yangisini oling — eskisi endi amal qilmaydi.</i>"
+               if features.on("certificate") else ""),
         ))
     return await send_many(bot, messages, reply_markup=result_kb(test["id"]))
 

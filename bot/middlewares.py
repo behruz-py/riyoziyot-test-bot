@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from . import db, subscription
+from . import db, features, subscription
 from .config import is_admin
 from .keyboards import BACK_AWARE_STATES, BTN_BACK, MENU_BUTTONS, subscribe_kb
 
@@ -58,7 +58,7 @@ class SubscriptionMiddleware(BaseMiddleware):
     ) -> Any:
         user = data["user"]
         uid = user["id"]
-        if is_admin(uid):
+        if is_admin(uid) or not features.on("subscription"):
             return await handler(event, data)
 
         is_check = isinstance(event, CallbackQuery) and event.data == "check_sub"

@@ -3,6 +3,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from . import features
 from .config import is_admin
 
 BTN_CREATE = "➕ Test yaratish"
@@ -28,10 +29,13 @@ BACK_AWARE_STATES = ("Create:", "Solve:")
 
 
 def main_menu(user_id: int) -> ReplyKeyboardMarkup:
+    third = [KeyboardButton(text=BTN_PROFILE)]
+    if features.on("rating"):
+        third.insert(0, KeyboardButton(text=BTN_RATING))
     rows = [
         [KeyboardButton(text=BTN_CHECK), KeyboardButton(text=BTN_CREATE)],
         [KeyboardButton(text=BTN_MY_RESULTS), KeyboardButton(text=BTN_MY_TESTS)],
-        [KeyboardButton(text=BTN_RATING), KeyboardButton(text=BTN_PROFILE)],
+        third,
         [KeyboardButton(text=BTN_HELP)],
     ]
     if is_admin(user_id):
@@ -65,10 +69,13 @@ def subscribe_kb(channels) -> InlineKeyboardMarkup:
 
 def result_kb(test_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(
-        InlineKeyboardButton(text="🏆 Reyting", callback_data=f"rating:{test_id}"),
-        InlineKeyboardButton(text="🎓 Sertifikat", callback_data=f"cert:{test_id}"),
-    )
+    extra = []
+    if features.on("rating"):
+        extra.append(InlineKeyboardButton(text="🏆 Reyting", callback_data=f"rating:{test_id}"))
+    if features.on("certificate"):
+        extra.append(InlineKeyboardButton(text="🎓 Sertifikat", callback_data=f"cert:{test_id}"))
+    if extra:
+        kb.row(*extra)
     kb.row(InlineKeyboardButton(text="✅ Yana test tekshirish", callback_data="go:check"), home_btn())
     return kb.as_markup()
 

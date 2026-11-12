@@ -1,4 +1,6 @@
-"""Test yaratish: 1) nom -> 2) kalit -> 3) ball tizimi -> 4) muddat -> tasdiqlash."""
+"""Test yaratish: nom -> kalit -> [ball tizimi] -> [muddat] -> tasdiqlash.
+
+Qavsdagi qadamlar admin paneldagi funksiyalar yoqilgan bo'lsagina ko'rsatiladi (features.py)."""
 from __future__ import annotations
 
 from html import escape
@@ -10,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import db, keyparser as kp, moderation, services
+from .. import db, features, keyparser as kp, moderation, services
 from ..config import MAX_TITLE_LEN, is_admin
 from ..keyboards import BTN_BACK, BTN_CREATE, NO_PREVIEW, cancel_kb, flow_kb, home_btn, main_menu
 
@@ -35,14 +37,13 @@ class Create(StatesGroup):
     confirm = State()
 
 
-KEY_HELP = (
-    "🔑 <b>2-qadam (4 tadan): javoblar kaliti</b>\n\n"
-    "Testning <b>to'g'ri javoblarini</b> bitta xabarda yuboring — har bir savol uchun bitta harf: "
-    "<b>A, B, C yoki D</b>.\n\n"
-    "Namuna:\n<code>1A2B3C4D5A…</code>  yoki  <code>ABCDA…</code>\n\n"
-    "<i>• Katta yoki kichik harf bilan yozish farq qilmaydi\n"
-    "• Bo'shliq va yangi qatorlar ham mumkin: </i><code>1A 2B 3C</code>\n"
-    "<i>• Savollar ko'p bo'lsa, xabarni bo'laklab emas, bittada yuboring (200 tagacha)</i>"
+KEY_EXAMPLES_OPEN = (
+    "\n\n<b>Ochiq (yozma) javobli savollar ham bo'lsa</b> — har bir javob yangi qatordan:\n"
+    "<code>1. A\n2. C\n3. 12.5\n4. x=2</code>\n"
+    "<i>• Bitta harf (A–D) — variantli savol, boshqa qiymat — ochiq javob deb olinadi\n"
+    "• Ochiq savolda bir nechta to'g'ri javob: </i><code>0.5|1/2</code>\n"
+    "<i>• Ochiq javoblarda katta-kichik harf va bo'shliq farq qilmaydi, sonlar qiymati bo'yicha "
+    "solishtiriladi (0,5 = 0.50 = 1/2)</i>"
 )
 
 DEADLINE_KB = InlineKeyboardMarkup(inline_keyboard=[
@@ -59,9 +60,40 @@ POINTS_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="✅ Har bir savol 1 ball", callback_data="cr:p:std")],
     [InlineKeyboardButton(text="⚖️ Savollarga alohida ball berish", callback_data="cr:p:custom")],
 ])
+CONTINUE_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="➡️ Davom etish", callback_data="cr:p:std")],
+])
 
 
-# ---------------------------------------------------------------- qadamlar
+# ---------------------------------------------------------------- qadamlar (soni yoqilgan funksiyalarga bog'liq)
+def _steps() -> list[str]:
+    steps = ["title", "key"]
+    if features.on("custom_points"):
+        steps.append("points")
+    if features.on("deadline"):
+        steps.append("deadline")
+    return steps
+
+
+def _step(name: str) -> str:
+    steps = _steps()
+    return f"{steps.index(name) + 1}-qadam ({len(steps)} tadan)" if name in steps else "Qadam"
+
+
+def key_help() -> str:
+    open_ok = features.on("open_questions")
+    return (
+        f"🔑 <b>{_step('key')}: javoblar kaliti</b>\n\n"
+        "Testning <b>to'g'ri javoblarini</b> bitta xabarda yuboring — har bir savol uchun bitta harf: "
+        "<b>A, B, C yoki D</b>.\n\n"
+        "Namuna:\n<code>1A2B3C4D5A…</code>  yoki  <code>ABCDA…</code>\n\n"
+        "<i>• Katta yoki kichik harf bilan yozish farq qilmaydi\n"
+        "• Bo'shliq va yangi qatorlar ham mumkin: </i><code>1A 2B 3C</code>\n"
+        "<i>• Savollar ko'p bo'lsa, xabarni bo'laklab emas, bittada yuboring (200 tagacha)</i>"
+        + (KEY_EXAMPLES_OPEN if open_ok else "")
+    )
+
+
 async def start_create(bot: Bot, state: FSMContext, user) -> None:
     uid = user["id"]
     if not is_admin(uid) and await db.count_tests_by_owner(uid) >= MAX_TESTS_PER_USER:
@@ -80,7 +112,7 @@ async def start_create(bot: Bot, state: FSMContext, user) -> None:
 async def _ask_title(bot: Bot, user_id: int) -> None:
     await bot.send_message(
         user_id,
-        "📝 <b>1-qadam (4 tadan): test nomi</b>\n\n"
+        f"📝 <b>{_step('title')}: test nomi</b>\n\n"
         "Testga nom bering — o'quvchilar uni shu nom bilan ko'radi.\n"
         "<i>Masalan: Algebra 9-sinf, 2-nazorat ishi</i>",
         reply_markup=flow_kb(placeholder="Test nomi"),
@@ -88,23 +120,27 @@ async def _ask_title(bot: Bot, user_id: int) -> None:
 
 
 async def _show_key_step(bot: Bot, user_id: int, state: FSMContext) -> None:
-    """2-qadam: kalit hali kiritilmagan bo'lsa so'raydi, kiritilgan bo'lsa ko'rsatib, 3-qadamni taklif qiladi."""
+    """Kalit qadami: kalit hali kiritilmagan bo'lsa so'raydi, kiritilgan bo'lsa ko'rsatib, keyingi qadamni taklif qiladi."""
     await state.set_state(Create.key)
     questions = (await state.get_data()).get("questions")
     if not questions:
-        await bot.send_message(user_id, KEY_HELP, reply_markup=flow_kb(placeholder="Javoblar kaliti"))
+        await bot.send_message(user_id, key_help(), reply_markup=flow_kb(placeholder="Javoblar kaliti"))
         return
     lines = [
-        f"✅ <b>Kalit qabul qilindi:</b> {len(questions)} ta savol",
+        f"✅ <b>Kalit qabul qilindi:</b> {services.questions_count(questions, noun=True)}",
         "",
         *services.key_preview(questions),
         "",
         "☝️ Kalitni ko'zdan kechiring. Xato bo'lsa — to'g'rilab, <b>qaytadan yuboring</b>.",
         "",
-        "⚖️ <b>3-qadam (4 tadan): ball tizimi</b>",
-        "Hammasi to'g'ri bo'lsa, ball tizimini tanlang 👇",
     ]
-    await services.send_long(bot, user_id, lines, reply_markup=POINTS_KB)
+    if features.on("custom_points"):
+        lines += [f"⚖️ <b>{_step('points')}: ball tizimi</b>", "Hammasi to'g'ri bo'lsa, ball tizimini tanlang 👇"]
+        markup = POINTS_KB
+    else:
+        lines.append("Hammasi to'g'ri bo'lsa, davom eting 👇")
+        markup = CONTINUE_KB
+    await services.send_long(bot, user_id, lines, reply_markup=markup)
 
 
 async def _ask_points(bot: Bot, user_id: int, state: FSMContext) -> None:
@@ -112,7 +148,7 @@ async def _ask_points(bot: Bot, user_id: int, state: FSMContext) -> None:
     n = len((await state.get_data())["questions"])
     await bot.send_message(
         user_id,
-        "⚖️ <b>3-qadam (4 tadan): savollar bali</b>\n\n"
+        f"⚖️ <b>{_step('points')}: savollar bali</b>\n\n"
         "Ballarni <code>savollar: ball</code> ko'rinishida yuboring.\n\n"
         "Namuna:\n<code>1-10: 1.1; 11-20: 2.1; 21-30: 3.1</code>\n"
         "Bitta savol uchun: <code>5: 2.5</code>\n\n"
@@ -126,13 +162,28 @@ async def _ask_deadline(bot: Bot, user_id: int, state: FSMContext) -> None:
     await state.set_state(Create.deadline)
     await bot.send_message(
         user_id,
-        "⏰ <b>4-qadam (4 tadan): javob qabul qilish muddati</b>\n\n"
+        f"⏰ <b>{_step('deadline')}: javob qabul qilish muddati</b>\n\n"
         "Tugmalardan birini tanlang yoki aniq tugash vaqtini yozing:\n"
         "<code>25.12.2026 18:00</code>\n\n"
         "<i>Muddat tugagach test o'zi yakunlanadi: sizga hisobot, ishtirokchilarga yakuniy natija boradi. "
         "Muddatsiz testni istalgan payt o'zingiz yakunlaysiz.</i>",
         reply_markup=DEADLINE_KB,
     )
+
+
+async def _after_points(bot: Bot, user_id: int, state: FSMContext) -> None:
+    """Ball qadamidan keyingi qadam: muddat (yoqilgan bo'lsa) yoki to'g'ridan-to'g'ri tasdiqlash."""
+    if features.on("deadline"):
+        await _ask_deadline(bot, user_id, state)
+    else:
+        await _ask_confirm(bot, user_id, state, None)
+
+
+async def _back_from_confirm(bot: Bot, user_id: int, state: FSMContext) -> None:
+    if features.on("deadline"):
+        await _ask_deadline(bot, user_id, state)
+    else:
+        await _show_key_step(bot, user_id, state)
 
 
 async def _ask_confirm(bot: Bot, user_id: int, state: FSMContext, deadline: str | None) -> None:
@@ -145,16 +196,17 @@ async def _ask_confirm(bot: Bot, user_id: int, state: FSMContext, deadline: str 
         [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="cr:back"),
          InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cr:cancel")],
     ])
-    await bot.send_message(
-        user_id,
-        "🔎 <b>Hammasi to'g'rimi?</b>\n\n"
-        f"📋 Nomi: <b>{escape(data['title'])}</b>\n"
-        f"❓ Savollar: <b>{len(questions)}</b> ta\n"
-        f"💯 Ball: {services.points_summary(questions)}\n"
-        f"⏰ Muddat: <b>{services.to_local(deadline) + ' gacha' if deadline else 'belgilanmagan'}</b>\n\n"
-        "To'g'ri bo'lsa, <b>«✅ Testni yaratish»</b>ni bosing.",
-        reply_markup=kb,
-    )
+    lines = [
+        "🔎 <b>Hammasi to'g'rimi?</b>",
+        "",
+        f"📋 Nomi: <b>{escape(data['title'])}</b>",
+        f"❓ Savollar: <b>{services.questions_count(questions)}</b>",
+        f"💯 Ball: {services.points_summary(questions)}",
+    ]
+    if features.on("deadline") or deadline:
+        lines.append(f"⏰ Muddat: <b>{services.to_local(deadline) + ' gacha' if deadline else 'belgilanmagan'}</b>")
+    lines += ["", "To'g'ri bo'lsa, <b>«✅ Testni yaratish»</b>ni bosing."]
+    await bot.send_message(user_id, "\n".join(lines), reply_markup=kb)
 
 
 # ---------------------------------------------------------------- boshlash
@@ -192,13 +244,13 @@ async def back_to_key(message: Message, state: FSMContext, user) -> None:
 
 @router.message(Create.confirm, F.text == BTN_BACK)
 async def back_from_confirm(message: Message, state: FSMContext, user) -> None:
-    await _ask_deadline(message.bot, user["id"], state)
+    await _back_from_confirm(message.bot, user["id"], state)
 
 
 @router.callback_query(Create.confirm, F.data == "cr:back")
 async def back_from_confirm_cb(callback: CallbackQuery, state: FSMContext, user) -> None:
     await callback.answer()
-    await _ask_deadline(callback.bot, user["id"], state)
+    await _back_from_confirm(callback.bot, user["id"], state)
 
 
 # ---------------------------------------------------------------- ma'lumot qabul qilish
@@ -223,7 +275,7 @@ async def got_title(message: Message, state: FSMContext, user) -> None:
 @router.message(Create.key, F.text)
 async def got_key(message: Message, state: FSMContext, user) -> None:
     try:
-        questions = kp.build_questions(kp.parse_answers(message.text))
+        questions = kp.build_questions(kp.parse_answers(message.text), allow_open=features.on("open_questions"))
     except kp.ParseError as e:
         await message.answer(f"⚠️ {e}\n\nKalitni to'g'rilab, qaytadan yuboring 👇")
         return
@@ -231,26 +283,20 @@ async def got_key(message: Message, state: FSMContext, user) -> None:
     await _show_key_step(message.bot, user["id"], state)
 
 
-@router.callback_query(Create.key, F.data == "cr:p:std")
-async def points_std(callback: CallbackQuery, state: FSMContext, user) -> None:
+@router.callback_query(Create.key, F.data.in_({"cr:p:std", "cr:p:custom"}))
+async def points_choice(callback: CallbackQuery, state: FSMContext, user) -> None:
     data = await state.get_data()
     if not data.get("questions"):
         await callback.answer("Avval javoblar kalitini yuboring.", show_alert=True)
         return
+    await callback.answer()
+    if callback.data == "cr:p:custom" and features.on("custom_points"):
+        await _ask_points(callback.bot, user["id"], state)
+        return
     for q in data["questions"]:
         q["p"] = 1.0
     await state.update_data(questions=data["questions"])
-    await callback.answer()
-    await _ask_deadline(callback.bot, user["id"], state)
-
-
-@router.callback_query(Create.key, F.data == "cr:p:custom")
-async def points_custom(callback: CallbackQuery, state: FSMContext, user) -> None:
-    if not (await state.get_data()).get("questions"):
-        await callback.answer("Avval javoblar kalitini yuboring.", show_alert=True)
-        return
-    await callback.answer()
-    await _ask_points(callback.bot, user["id"], state)
+    await _after_points(callback.bot, user["id"], state)
 
 
 @router.message(Create.points, F.text)
@@ -266,7 +312,7 @@ async def got_points(message: Message, state: FSMContext, user) -> None:
         q["p"] = p
     await state.update_data(questions=questions)
     await message.answer(f"✅ Ballar saqlandi. Maksimal ball: <b>{kp.fmt_num(sum(points))}</b>")
-    await _ask_deadline(message.bot, user["id"], state)
+    await _after_points(message.bot, user["id"], state)
 
 
 @router.callback_query(Create.deadline, F.data.startswith("cr:d:"))
@@ -313,7 +359,7 @@ async def build_post(bot: Bot, test) -> tuple[str, InlineKeyboardMarkup]:
     me = await bot.me()
     link = f"https://t.me/{me.username}?start=test_{test['code']}"
     lines = [f"📝 <b>{escape(test['title'])}</b>", ""]
-    if test["note"]:
+    if test["note"] and features.on("post_note"):
         lines += [escape(test["note"]), ""]
     lines.append(f"❓ Savollar soni: <b>{len(questions)} ta</b>")
     lines.append(f"💯 Ball: {services.points_summary(questions)}")
@@ -339,9 +385,11 @@ async def send_post(bot: Bot, user_id: int, test, created: bool = False) -> None
     await bot.send_message(user_id, text, reply_markup=kb, link_preview_options=NO_PREVIEW)
     tid = test["id"]
     controls = InlineKeyboardBuilder()
-    controls.row(InlineKeyboardButton(text="✍️ Izohni o'zgartirish" if test["note"] else "✍️ Izoh qo'shish",
-                                      callback_data=f"t:note:{tid}"))
-    if test["note"]:
+    note_on = features.on("post_note")
+    if note_on:
+        controls.row(InlineKeyboardButton(text="✍️ Izohni o'zgartirish" if test["note"] else "✍️ Izoh qo'shish",
+                                          callback_data=f"t:note:{tid}"))
+    if note_on and test["note"]:
         controls.row(InlineKeyboardButton(text="🗑 Izohni olib tashlash", callback_data=f"t:notedel:{tid}"))
     controls.row(InlineKeyboardButton(text="⚙️ Testni boshqarish", callback_data=f"t:v:{tid}"))
     if created:
@@ -352,8 +400,9 @@ async def send_post(bot: Bot, user_id: int, test, created: bool = False) -> None
         user_id,
         "👆 <b>O'quvchilar uchun tayyor post.</b>\n\n"
         "Uni o'quvchilaringizga yoki kanal/guruhingizga <b>forward</b> qiling — «✅ Javoblarni yuborish» "
-        "tugmasi ham birga o'tadi: bosgan odamga bot darhol shu testni ochadi.\n\n"
-        "<i>Postga o'z izohingizni qo'shishingiz mumkin, masalan: «9-B sinf, 2-chorak nazorat ishi. Omad!»</i>",
+        "tugmasi ham birga o'tadi: bosgan odamga bot darhol shu testni ochadi."
+        + ("\n\n<i>Postga o'z izohingizni qo'shishingiz mumkin, masalan: «9-B sinf, 2-chorak nazorat ishi. "
+           "Omad!»</i>" if note_on else ""),
         reply_markup=controls.as_markup(),
     )
 
@@ -381,6 +430,9 @@ async def post_cb(callback: CallbackQuery, state: FSMContext, user) -> None:
 
 @router.callback_query(F.data.startswith("t:note:"))
 async def note_ask(callback: CallbackQuery, state: FSMContext, user) -> None:
+    if not features.on("post_note"):
+        await callback.answer(features.OFF_TEXT, show_alert=True)
+        return
     test = await _post_test(callback, user)
     if test is None:
         return

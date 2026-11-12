@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import db, keyparser as kp, services
+from .. import db, features, keyparser as kp, services
 from ..config import ADMIN_IDS, is_admin
 from ..keyboards import BTN_MY_TESTS, flow_kb, home_btn, main_menu, pager
 from .create import send_post
@@ -61,8 +61,14 @@ async def my_tests_page(callback: CallbackQuery, user) -> None:
     await callback.answer()
 
 
+_PARTICIPANT_ACTIONS = ("t:pl:", "t:pu:", "t:ph:", "t:pr:", "t:pp:")
+
+
 async def _owned_test(callback: CallbackQuery, user):
     """Callback ma'lumotidagi testni qaytaradi (faqat muallif yoki admin uchun)."""
+    if callback.data.startswith(_PARTICIPANT_ACTIONS) and not features.on("participants"):
+        await callback.answer(features.OFF_TEXT, show_alert=True)
+        return None
     test = await db.get_test(int(callback.data.split(":")[2]))
     if test is None:
         await callback.answer("Test topilmadi (o'chirilgan bo'lishi mumkin).", show_alert=True)
@@ -81,22 +87,28 @@ async def _view(test):
     text = (
         f"📋 <b>{escape(test['title'])}</b>\n\n"
         f"🔢 Kod: <code>{test['code']}</code>\n"
-        f"❓ Savollar: <b>{len(questions)}</b> ta\n"
+        f"❓ Savollar: <b>{services.questions_count(questions)}</b>\n"
         f"💯 Ball: {services.points_summary(questions)}\n"
         f"👥 Ishtirokchilar: <b>{participants}</b> nafar\n"
         f"📅 Yaratilgan: {services.to_local(test['created_at'])}\n"
-        f"⏰ Muddat: {services.to_local(test['deadline']) + ' gacha' if test['deadline'] else 'belgilanmagan'}\n"
+        + (f"⏰ Muddat: {services.to_local(test['deadline']) + ' gacha' if test['deadline'] else 'belgilanmagan'}\n"
+           if test["deadline"] or features.on("deadline") else "")
         + (f"✏️ Kalit tahrirlangan: {services.to_local(test['edited_at'])}\n" if test["edited_at"] else "")
         + f"Holati: {status}"
     )
     tid = test["id"]
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="📊 Natijalar", callback_data=f"t:res:{tid}"),
-           InlineKeyboardButton(text="📥 Excel hisobot", callback_data=f"t:xl:{tid}"))
-    kb.row(InlineKeyboardButton(text="👥 Ishtirokchilar", callback_data=f"t:pl:{tid}:0"),
-           InlineKeyboardButton(text="🔑 Kalit", callback_data=f"t:key:{tid}"))
-    kb.row(InlineKeyboardButton(text="✏️ Kalitni tahrirlash", callback_data=f"t:ed:{tid}"),
-           InlineKeyboardButton(text="📣 Post (ulashish)", callback_data=f"t:post:{tid}"))
+    buttons = [InlineKeyboardButton(text="📊 Natijalar", callback_data=f"t:res:{tid}")]
+    if features.on("excel"):
+        buttons.append(InlineKeyboardButton(text="📥 Excel hisobot", callback_data=f"t:xl:{tid}"))
+    if features.on("participants"):
+        buttons.append(InlineKeyboardButton(text="👥 Ishtirokchilar", callback_data=f"t:pl:{tid}:0"))
+    buttons.append(InlineKeyboardButton(text="🔑 Kalit", callback_data=f"t:key:{tid}"))
+    if features.on("key_edit"):
+        buttons.append(InlineKeyboardButton(text="✏️ Kalitni tahrirlash", callback_data=f"t:ed:{tid}"))
+    buttons.append(InlineKeyboardButton(text="📣 Post (ulashish)", callback_data=f"t:post:{tid}"))
+    for k in range(0, len(buttons), 2):
+        kb.row(*buttons[k:k + 2])
     if active:
         kb.row(InlineKeyboardButton(text="🏁 Testni yakunlash", callback_data=f"t:fin:{tid}"))
     kb.row(InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"t:del:{tid}"),
@@ -132,13 +144,16 @@ async def test_results(callback: CallbackQuery, user) -> None:
             f"📈 O'rtacha ball: <b>{kp.fmt_num(sum(scores) / len(scores))}</b> / {kp.fmt_num(all_subs[0]['max_score'])}",
             f"🔝 Eng yuqori: <b>{kp.fmt_num(max(scores))}</b> · eng past: <b>{kp.fmt_num(min(scores))}</b>",
             "",
-            "To'liq ro'yxat va har bir savol tahlili — «📥 Excel hisobot»da.",
+            *(["To'liq ro'yxat va har bir savol tahlili — «📥 Excel hisobot»da."] if features.on("excel") else []),
         ]
     await services.send_long(callback.bot, user["id"], lines)
 
 
 @router.callback_query(F.data.startswith("t:xl:"))
 async def test_excel(callback: CallbackQuery, user) -> None:
+    if not features.on("excel"):
+        await callback.answer(features.OFF_TEXT, show_alert=True)
+        return
     test = await _owned_test(callback, user)
     if test is None:
         return

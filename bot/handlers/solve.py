@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import certs, db, keyparser as kp, services
+from .. import certs, db, features, keyparser as kp, services
 from ..config import is_admin
 from ..keyboards import (
     BTN_BACK, BTN_CHECK, BTN_MY_RESULTS, BTN_RATING, cancel_kb, flow_kb, home_btn, main_menu, pager,
@@ -79,7 +79,9 @@ async def _ask_answers(bot: Bot, user_id: int, state: FSMContext, test) -> None:
         f"❓ Savollar soni: <b>{len(questions)}</b> ta\n"
         f"💯 Ball: {services.points_summary(questions)}{deadline}\n\n"
         f"{answer_guide(questions)}\n\n"
-        "<i>Yuborishdan oldin javoblaringizni ko'rib chiqish imkoni beriladi.</i>",
+        + ("<i>Yuborishdan oldin javoblaringizni ko'rib chiqish imkoni beriladi.</i>"
+           if features.on("confirm_submit") else
+           "❗️ Javobni faqat <b>bir marta</b> yuborish mumkin — yuborishdan oldin tekshirib oling."),
         reply_markup=flow_kb(placeholder="Javoblaringiz"),
     )
 
@@ -155,6 +157,9 @@ async def preview_answers(bot: Bot, state: FSMContext, user, test, text: str) ->
         )
         return
 
+    if not features.on("confirm_submit"):
+        await submit(bot, state, user, test, answers)
+        return
     await state.set_state(Solve.confirm)
     await state.set_data({"test_id": test["id"], "answers": answers})
     skipped = sum(1 for a in answers if a == kp.SKIP)
@@ -379,8 +384,8 @@ async def send_rating(bot: Bot, user, test, reply_markup=None) -> bool:
     """Reytingni yuboradi. Ruxsat bo'lmasa False."""
     uid = user["id"]
     sub = await db.get_submission(test["id"], uid)
-    if sub is not None and sub["is_hidden"]:
-        sub = None  # reytingdan chiqarilgan ishtirokchi reytingni ko'ra olmaydi
+    if sub is not None and (sub["is_hidden"] or not features.on("rating")):
+        sub = None  # reytingdan chiqarilgan ishtirokchi (yoki reyting o'chiq) - ko'ra olmaydi
     if sub is None and test["owner_id"] != uid and not is_admin(uid):
         return False
     total = await db.count_submissions(test["id"])
@@ -403,7 +408,10 @@ async def rating_cb(callback: CallbackQuery, state: FSMContext, user) -> None:
     # Reyting bo'limidan kelgan bo'lsa, kod kutish holatini yopib, asosiy menyuni qaytaramiz
     from_menu = await state.get_state() == RatingSt.code.state
     if not await send_rating(callback.bot, user, test, main_menu(user["id"]) if from_menu else None):
-        await callback.answer("Reytingni faqat testda qatnashganlar ko'ra oladi.", show_alert=True)
+        reason = "Reytingni faqat testda qatnashganlar ko'ra oladi."
+        if not features.on("rating") and await db.get_submission(test["id"], user["id"]):
+            reason = features.OFF_TEXT
+        await callback.answer(reason, show_alert=True)
         return
     if from_menu:
         await state.clear()
@@ -412,6 +420,9 @@ async def rating_cb(callback: CallbackQuery, state: FSMContext, user) -> None:
 
 @router.message(F.text == BTN_RATING)
 async def rating_ask(message: Message, state: FSMContext, user) -> None:
+    if not features.on("rating"):
+        await message.answer(features.OFF_TEXT, reply_markup=main_menu(user["id"]))
+        return
     await state.set_state(RatingSt.code)
     tests = await db.recent_tests_for_user(user["id"], 8)
     kb = InlineKeyboardBuilder()
@@ -455,6 +466,9 @@ async def rating_code(message: Message, state: FSMContext, user) -> None:
 async def certificate_cb(callback: CallbackQuery, user) -> None:
     test = await db.get_test(int(callback.data.split(":")[1]))
     sub = await db.get_submission(test["id"], user["id"]) if test else None
+    if not features.on("certificate"):
+        await callback.answer(features.OFF_TEXT, show_alert=True)
+        return
     if sub is None:
         await callback.answer("Sertifikat faqat testda qatnashganlarga beriladi.", show_alert=True)
         return

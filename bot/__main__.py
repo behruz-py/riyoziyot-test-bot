@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, ErrorEvent
 
-from . import admins, alerts, config, daily, db, services
+from . import admins, alerts, config, daily, db, features, services
 from .handlers import admin, create, keyedit, mytests, solve, start
 from .antiflood import ThrottleMiddleware
 from .middlewares import SubscriptionMiddleware, UserMiddleware
@@ -77,6 +77,7 @@ async def main() -> None:
 
     await db.init(config.DATABASE_URL or config.DB_PATH)
     await admins.load()
+    await features.load()
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = build_dispatcher()
 

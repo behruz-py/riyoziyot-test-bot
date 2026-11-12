@@ -76,6 +76,10 @@ async def custom_words() -> set[str]:
 
 
 async def is_bad(text: str) -> bool:
+    from . import features  # aylanma importning oldini olish
+
+    if not features.on("word_filter"):
+        return False
     return _check(text, await custom_words())
 
 
