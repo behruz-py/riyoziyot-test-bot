@@ -324,6 +324,7 @@ async def features_check():
     await features.set_value("rating", False)
     out = await msg(S1, "/start")
     assert kb.BTN_RATING not in last_reply_keyboard(), last_reply_keyboard()
+    assert "Reyting" not in out, "menyu matni o'chirilgan reytingni tilga olmoqda"
     out = await msg(S1, kb.BTN_RATING)
     assert OFF in out, out
     start = len(session.calls)
@@ -639,6 +640,7 @@ async def scenario():
     # --- admin: kanal qo'shish
     out = await msg(ADMIN, "/start")
     assert "ism va familiyangizni" in out
+    assert "reyting" not in out.lower() and "sertifikat" not in out.lower(), out  # kutib olish matni
     await msg(ADMIN, "Admin Adminov")
     out = await msg(ADMIN, kb.BTN_ADMIN)
     assert "Admin panel" in out

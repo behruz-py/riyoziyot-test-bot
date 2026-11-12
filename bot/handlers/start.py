@@ -28,13 +28,18 @@ class Profile(StatesGroup):
     name = State()
 
 
-MENU_TEXT = (
-    "🏠 <b>Asosiy menyu</b>\n\n"
-    "✅ <b>Javobni tekshirish</b> — test kodi bo'yicha javoblaringizni tekshiring\n"
-    "➕ <b>Test yaratish</b> — o'z testingizni o'tkazing\n"
-    "📊 <b>Natijalarim</b> · 📚 <b>Mening testlarim</b> · 🏆 <b>Reyting</b>\n\n"
-    "Kerakli bo'limni tanlang 👇"
-)
+def menu_text() -> str:
+    """Asosiy menyu matni - faqat yoqilgan bo'limlarni tilga oladi."""
+    sections = "📊 <b>Natijalarim</b> · 📚 <b>Mening testlarim</b>"
+    if features.on("rating"):
+        sections += " · 🏆 <b>Reyting</b>"
+    return (
+        "🏠 <b>Asosiy menyu</b>\n\n"
+        "✅ <b>Javobni tekshirish</b> — test kodi bo'yicha javoblaringizni tekshiring\n"
+        "➕ <b>Test yaratish</b> — o'z testingizni o'tkazing\n"
+        f"{sections}\n\n"
+        "Kerakli bo'limni tanlang 👇"
+    )
 
 def _first_upper(text: str) -> str:
     return text[:1].upper() + text[1:]
@@ -99,7 +104,7 @@ NAME_ERROR = (
 )
 BAD_NAME_ERROR = (
     "⚠️ Bu ismni qabul qila olmaymiz.\n\n"
-    "Iltimos, <b>haqiqiy ism va familiyangizni</b> yozing — u reyting va sertifikatda boshqalarga ko'rinadi."
+    "Iltimos, <b>haqiqiy ism va familiyangizni</b> yozing — u natijalarda boshqalarga ko'rinadi."
 )
 _NAME_EXTRA_CHARS = " '-.’ʻʼ‘`"
 
@@ -116,7 +121,8 @@ def valid_name(text: str) -> str | None:
     return name
 
 
-async def send_menu(bot: Bot, user_id: int, text: str = MENU_TEXT) -> None:
+async def send_menu(bot: Bot, user_id: int, text: str | None = None) -> None:
+    text = text or menu_text()
     await bot.send_message(user_id, text, reply_markup=main_menu(user_id))
 
 
@@ -138,11 +144,11 @@ async def enter(bot: Bot, state: FSMContext, user) -> None:
         await bot.send_message(
             uid,
             "👋 <b>Assalomu alaykum!</b>\n\n"
-            "Bu bot yordamida test javoblaringizni bir zumda tekshirasiz, natija va reytingni ko'rasiz, "
-            "o'zingiz ham test o'tkaza olasiz.\n\n"
-            "Boshlash uchun <b>ism va familiyangizni</b> yozing — u reyting va sertifikatda ko'rsatiladi.\n"
+            "✅ Test javoblaringizni bir zumda tekshiring\n"
+            "📝 O'zingiz ham test tuzib, o'tkazing\n\n"
+            "✍️ Boshlash uchun <b>ism va familiyangizni</b> yozing:\n"
             "<i>Masalan: Valijonov Rustamjon</i>"
-            + ("\n\nYoki quyidagi tugmani bosib, Telegram'dagi ismingizni tanlang 👇" if suggestion else ""),
+            + ("\n\n👇 Yoki pastdagi tugma orqali Telegram'dagi ismingizni tanlang" if suggestion else ""),
             reply_markup=keyboard,
         )
         return
@@ -154,7 +160,7 @@ async def enter(bot: Bot, state: FSMContext, user) -> None:
         await bot.send_message(uid, f"👋 Xush kelibsiz, <b>{escape(user['full_name'])}</b>!", reply_markup=main_menu(uid))
         await solve.open_test(bot, state, user, payload[5:])
         return
-    await send_menu(bot, uid, f"👋 Xush kelibsiz, <b>{escape(user['full_name'])}</b>!\n\n{MENU_TEXT}")
+    await send_menu(bot, uid, f"👋 Xush kelibsiz, <b>{escape(user['full_name'])}</b>!\n\n{menu_text()}")
 
 
 @router.message(CommandStart())
@@ -221,7 +227,7 @@ async def home(callback: CallbackQuery, state: FSMContext, user) -> None:
 @router.message(F.text == BTN_CANCEL)
 async def cancel(message: Message, user) -> None:
     # Holat UserMiddleware ichida tozalangan
-    await send_menu(message.bot, user["id"], "❌ Bekor qilindi.\n\n" + MENU_TEXT)
+    await send_menu(message.bot, user["id"], "❌ Bekor qilindi.\n\n" + menu_text())
 
 
 @router.message(StateFilter(None), F.text == BTN_BACK)
