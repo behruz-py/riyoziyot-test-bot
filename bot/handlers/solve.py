@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import db, keyparser as kp, services
+from .. import certs, db, keyparser as kp, services
 from ..config import is_admin
 from ..keyboards import (
     BTN_BACK, BTN_CHECK, BTN_MY_RESULTS, BTN_RATING, cancel_kb, flow_kb, home_btn, main_menu, pager,
@@ -456,26 +456,18 @@ async def certificate_cb(callback: CallbackQuery, user) -> None:
         return
     await callback.answer("🎓 Sertifikat tayyorlanmoqda…")
     await callback.bot.send_chat_action(user["id"], "upload_photo")
-    from ..certificate import build_certificate
-
-    finished = not services.is_open(test)
-    data = await asyncio.to_thread(
-        build_certificate,
-        name=sub["full_name"],
-        title=test["title"],
-        code=test["code"],
-        correct=sub["correct_count"],
-        total_q=len(services.questions_of(test)),
-        score=kp.fmt_num(sub["score"]),
-        max_score=kp.fmt_num(sub["max_score"]),
-        percent=services.percent(sub["score"], sub["max_score"]),
-        rank=await db.rank_of(sub) if finished else None,
-        participants=await db.count_submissions(test["id"]),
-        date=services.to_local(sub["submitted_at"])[:10],
-    )
-    caption = "🎓 <b>Sertifikatingiz tayyor!</b>"
-    if not finished:
-        caption += "\n\n<i>Test yakunlangach qayta olsangiz, unda egallagan o'rningiz ham yoziladi.</i>"
-    await callback.bot.send_photo(
-        user["id"], BufferedInputFile(data, filename=f"sertifikat_{test['code']}.png"), caption=caption
+    png, pdf, info = await certs.issue(callback.bot, test, sub)
+    caption = f"🎓 <b>{info['title']}</b>\n№ <code>{info['number']}</code>"
+    if not info["finished"]:
+        caption += (
+            "\n\n<i>Test hali yakunlanmagan. Yakunlangach qayta olsangiz, sertifikatda egallagan o'rningiz "
+            "yoziladi, 1–3-o'rinlar esa diplom oladi.</i>"
+        )
+    await callback.bot.send_photo(user["id"], BufferedInputFile(png, filename=f"sertifikat_{test['code']}.png"),
+                                  caption=caption)
+    await callback.bot.send_document(
+        user["id"],
+        BufferedInputFile(pdf, filename=f"sertifikat_{info['number']}.pdf"),
+        caption="📄 Chop etish uchun PDF nusxa.\n"
+                "<i>Sertifikatdagi QR kod skanerlansa, bot uning haqiqiyligini tasdiqlaydi.</i>",
     )

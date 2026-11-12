@@ -19,7 +19,8 @@ from aiogram.types import (  # noqa: E402
     CallbackQuery, Chat, ChatMemberAdministrator, ChatMemberLeft, ChatMemberMember, Message, Update, User,
 )
 
-from bot import admins, backup, config, daily, db, keyboards as kb, services, subscription  # noqa: E402
+from bot import admins, backup, certs, config, daily, db, keyboards as kb, services  # noqa: E402
+from bot import subscription  # noqa: E402
 from bot.__main__ import build_dispatcher  # noqa: E402
 from bot.handlers import admin as admin_h, create as create_h, mytests as mytests_h  # noqa: E402
 from bot.handlers import solve as solve_h, start as start_h  # noqa: E402
@@ -37,12 +38,13 @@ class FakeSession(BaseSession):
         super().__init__()
         self.calls = []
         self.subscribed: set[int] = set()
+        self.file_bytes = b""  # bot.download() qaytaradigan fayl
 
     async def close(self):
         pass
 
     async def stream_content(self, *a, **k):
-        yield b""
+        yield self.file_bytes
 
     async def make_request(self, bot, method, timeout=None):
         self.calls.append(method)
@@ -55,6 +57,10 @@ class FakeSession(BaseSession):
                 # model_construct: Bot API versiyasiga bog'liq majburiy maydonlarni to'ldirmaslik uchun
                 return ChatMemberAdministrator.model_construct(status="administrator", user=user)
             return ChatMemberMember(user=user) if method.user_id in self.subscribed else ChatMemberLeft(user=user)
+        if name == "GetFile":
+            from aiogram.types import File
+            return File(file_id=method.file_id, file_unique_id="u", file_size=len(self.file_bytes),
+                        file_path="logo.png")
         if name == "GetChat":
             from aiogram.types import ChatFullInfo
             return ChatFullInfo.model_construct(
@@ -434,7 +440,24 @@ async def scenario():
     assert "3 / 5" in out
     start = len(session.calls)
     await cb(S1, f"cert:{tid}")
-    assert "SendPhoto" in names(start), names(start)
+    assert "SendPhoto" in names(start) and "SendDocument" in names(start), names(start)
+    sub1 = await db.get_submission(tid, S1)
+    out = texts(start)
+    assert "Sertifikat — Yaxshi daraja" in out and f"{code}-{sub1['id']:05d}" in out, out  # 5.2/7.3 = 71%
+    assert "Test hali yakunlanmagan" in out, out
+    pdf = [m for m in session.calls[start:] if type(m).__name__ == "SendDocument"][0].document.data
+    assert pdf[:5] == b"%PDF-" and len(pdf) > 20_000
+    # QR orqali tekshirish (istalgan foydalanuvchi)
+    cert_token = await certs.token(sub1["id"])
+    out = await msg(77, f"/start cert_{cert_token}")
+    assert "Sertifikat haqiqiy" in out and "Aliyev Vali" in out and "5.2 / 7.3" in out, out
+    assert "hali yakunlanmagan" in out, out
+    out = await msg(77, f"/start cert_{sub1['id']}_0000000000")  # imzo noto'g'ri
+    assert "Sertifikat topilmadi" in out, out
+    out = await msg(77, f"/start cert_{sub1['id'] + 1}_{cert_token.split('_')[1]}")  # boshqa natijaga urinish
+    assert "Sertifikat topilmadi" in out, out
+    out = await msg(77, "/start cert_abc")
+    assert "Sertifikat topilmadi" in out, out
 
     # --- muallif: ro'yxat, ko'rish, natijalar, excel, kalit
     out = await msg(TEACHER, kb.BTN_MY_TESTS)
@@ -467,6 +490,9 @@ async def scenario():
     assert "Salimova" not in out and "2 nafar" in out, out
     out = await cb(S3, f"res:{tid}")
     assert "reytingidan chiqarilgan" in out and "test muallifi" in out, out
+    sub3 = await db.get_submission(tid, S3)
+    out = await msg(S1, f"/start cert_{await certs.token(sub3['id'])}")
+    assert "Sertifikat bekor qilingan" in out, out
     start = len(session.calls)
     await cb(S3, f"rating:{tid}")
     await cb(S3, f"cert:{tid}")
@@ -538,6 +564,54 @@ async def scenario():
     assert "to'g'ri: <code>B</code>" in out and "to'g'ri: <code>D</code>" in out and "yakuniy" in out, out
     out = await msg(77, f"{code}*abcda")
     assert "yakunlangan" in out, out
+
+    # --- sertifikat sozlamalari (admin) va diplomlar
+    out = await cb(ADMIN, "adm:cert")
+    assert "Sertifikat sozlamalari" in out and "kiritilmagan" in out, out
+    await cb(ADMIN, "adm:cset:org")
+    out = await msg(ADMIN, "x")
+    assert "2–60 belgi" in out, out
+    out = await msg(ADMIN, "«Riyoziyot» o'quv markazi")
+    assert "Tashkilot nomi: <b>«Riyoziyot» o&#x27;quv markazi</b>" in out, out
+    await cb(ADMIN, "adm:cset:signer")
+    await msg(ADMIN, "A. Karimov")
+    await cb(ADMIN, "adm:cset:role")
+    await msg(ADMIN, "Markaz direktori")
+    assert (await certs.settings())[certs.KEY_SIGNER] == "A. Karimov"
+    await cb(ADMIN, "adm:clogo")
+    out = await msg(ADMIN, "bu matn")  # rasm kutilmoqda
+    assert "logotipni" in out, out
+    session.file_bytes = b"bu rasm emas"
+    out = await photo(ADMIN)
+    assert "o'qib bo'lmadi" in out, out
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGBA", (300, 200), (31, 58, 95, 255)).save(buf, "PNG")
+    session.file_bytes = buf.getvalue()
+    out = await photo(ADMIN)
+    assert "Logotip saqlandi" in out and "adm:clogodel" in last_markup_data(), out
+    start = len(session.calls)
+    await cb(S1, "adm:cert")  # oddiy foydalanuvchi kira olmaydi
+    await cb(S1, "adm:csample")
+    assert "SendPhoto" not in names(start) and "Sertifikat sozlamalari" not in texts(start)
+    start = len(session.calls)
+    await cb(ADMIN, "adm:csample")
+    assert "SendPhoto" in names(start) and "Namuna" in texts(start), names(start)
+    start = len(session.calls)
+    await cb(S2, f"cert:{tid}")  # yakunlangan test, 1-o'rin -> diplom (logotip va imzo bilan)
+    out = texts(start)
+    assert "Diplom — I o'rin" in out and "Test hali yakunlanmagan" not in out, out
+    start = len(session.calls)
+    await cb(S1, f"cert:{tid}")
+    assert "Diplom — II o'rin" in texts(start), texts(start)
+    out = await msg(77, f"/start cert_{cert_token}")
+    assert "Sertifikat haqiqiy" in out and "O'rin: <b>2 / 3</b>" in out and "Diplom" in out, out
+    await cb(ADMIN, "adm:cset:role")
+    out = await msg(ADMIN, "-")
+    assert "o'chirildi" in out and (await certs.settings())[certs.KEY_ROLE] is None, out
+    await cb(ADMIN, "adm:clogodel")
+    assert (await certs.settings())[certs.KEY_LOGO] is None
 
     # --- muddatli test + avtomatik yakunlash
     await msg(TEACHER, kb.BTN_CREATE)

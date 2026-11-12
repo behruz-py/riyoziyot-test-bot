@@ -16,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from datetime import datetime, timedelta
 
-from .. import admins, daily, db, keyparser as kp, moderation, services, subscription
+from .. import admins, certs, daily, db, keyparser as kp, moderation, services, subscription
 from ..config import ADMIN_IDS, TZ, is_admin
 from ..keyboards import BTN_ADMIN, NO_PREVIEW, cancel_kb, home_btn, main_menu
 
@@ -33,6 +33,8 @@ class Admin(StatesGroup):
     block = State()
     badword = State()
     addadmin = State()
+    certtext = State()
+    certlogo = State()
 
 
 PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
@@ -43,6 +45,7 @@ PANEL_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="🚫 Bloklash / blokdan chiqarish", callback_data="adm:block")],
     [InlineKeyboardButton(text="🧹 Taqiqlangan so'zlar", callback_data="adm:words"),
      InlineKeyboardButton(text="👮 Adminlar", callback_data="adm:admins")],
+    [InlineKeyboardButton(text="🎓 Sertifikat sozlamalari", callback_data="adm:cert")],
     [InlineKeyboardButton(text="💾 Zaxira nusxa", callback_data="adm:backup"),
      InlineKeyboardButton(text="🗓 Kunlik hisobot", callback_data="adm:daily")],
     [home_btn()],
@@ -745,3 +748,154 @@ async def admin_remove(callback: CallbackQuery) -> None:
         pass
     text, kb = await _admins_view(callback.from_user.id)
     await services.edit_or_send(callback, text, kb)
+
+
+# ---------------------------------------------------------------- sertifikat sozlamalari
+_CERT_FIELDS = {
+    "org": (certs.KEY_ORG, "Tashkilot nomi", 60, "«Riyoziyot» o'quv markazi"),
+    "signer": (certs.KEY_SIGNER, "Imzo egasi", 40, "A. Karimov"),
+    "role": (certs.KEY_ROLE, "Imzo egasining lavozimi", 40, "Markaz direktori"),
+}
+
+
+async def _cert_view():
+    conf = await certs.settings()
+
+    def shown(key: str) -> str:
+        return f"<b>{escape(conf[key])}</b>" if conf[key] else "<i>kiritilmagan</i>"
+
+    text = (
+        "🎓 <b>Sertifikat sozlamalari</b>\n\n"
+        f"🏫 Tashkilot nomi: {shown(certs.KEY_ORG)}\n"
+        f"✍️ Imzo egasi: {shown(certs.KEY_SIGNER)}\n"
+        f"💼 Lavozimi: {shown(certs.KEY_ROLE)}\n"
+        f"🖼 Logotip: {'<b>yuklangan</b>' if conf[certs.KEY_LOGO] else '<i>yuklanmagan</i>'}\n\n"
+        "<i>Bu ma'lumotlar barcha sertifikat va diplomlarda chiqadi. Kiritilmagan qismlar "
+        "sertifikatda ko'rsatilmaydi. O'zgartirgach, «👁 Namuna»ni bosib tekshiring.</i>"
+    )
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🏫 Tashkilot nomi", callback_data="adm:cset:org"),
+           InlineKeyboardButton(text="🖼 Logotip", callback_data="adm:clogo"))
+    kb.row(InlineKeyboardButton(text="✍️ Imzo egasi", callback_data="adm:cset:signer"),
+           InlineKeyboardButton(text="💼 Lavozimi", callback_data="adm:cset:role"))
+    if conf[certs.KEY_LOGO]:
+        kb.row(InlineKeyboardButton(text="🗑 Logotipni o'chirish", callback_data="adm:clogodel"))
+    kb.row(InlineKeyboardButton(text="👁 Namuna", callback_data="adm:csample"),
+           InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm:panel"))
+    return text, kb.as_markup()
+
+
+@router.callback_query(F.data == "adm:cert")
+async def cert_settings(callback: CallbackQuery) -> None:
+    text, kb = await _cert_view()
+    await services.edit_or_send(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:cset:"))
+async def cert_set(callback: CallbackQuery, state: FSMContext) -> None:
+    field = callback.data.split(":")[2]
+    if field not in _CERT_FIELDS:
+        await callback.answer()
+        return
+    _, title, limit, example = _CERT_FIELDS[field]
+    await callback.answer()
+    await state.set_state(Admin.certtext)
+    await state.set_data({"field": field})
+    await callback.bot.send_message(
+        callback.from_user.id,
+        f"✏️ <b>{title}</b>\n\nYangi qiymatni yuboring (ko'pi bilan {limit} belgi).\n"
+        f"<i>Masalan: {escape(example)}</i>\n\n"
+        "O'chirib tashlash uchun <code>-</code> yuboring.",
+        reply_markup=cancel_kb(title),
+    )
+
+
+@router.message(Admin.certtext, F.text)
+async def cert_set_got(message: Message, state: FSMContext) -> None:
+    field = (await state.get_data()).get("field")
+    if field not in _CERT_FIELDS:
+        await state.clear()
+        return
+    key, title, limit, _ = _CERT_FIELDS[field]
+    value = " ".join(message.text.split())
+    if value == "-":
+        value = ""
+    elif not (2 <= len(value) <= limit):
+        await message.answer(f"⚠️ Uzunligi 2–{limit} belgi bo'lishi kerak (siz yuborgani: {len(value)}). Qaytadan 👇")
+        return
+    await certs.set_value(key, value)
+    await state.clear()
+    await message.answer(
+        f"✅ {title}: " + (f"<b>{escape(value)}</b>" if value else "o'chirildi"),
+        reply_markup=main_menu(message.from_user.id),
+    )
+    text, kb = await _cert_view()
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "adm:clogo")
+async def cert_logo(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(Admin.certlogo)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        "🖼 <b>Logotip</b>\n\nLogotipni yuboring.\n\n"
+        "<i>• Eng yaxshi natija: foni shaffof PNG, <b>fayl sifatida</b> yuborilgan "
+        "(rasm sifatida yuborilsa, Telegram shaffof fonni oq qilib qo'yadi)\n"
+        "• Kvadrat yoki yotiq shakl, kamida 300 piksel</i>",
+        reply_markup=cancel_kb(),
+    )
+
+
+@router.message(Admin.certlogo, F.photo | F.document)
+async def cert_logo_got(message: Message, state: FSMContext) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    if message.photo:
+        file_id, size = message.photo[-1].file_id, message.photo[-1].file_size or 0
+    else:
+        file_id, size = message.document.file_id, message.document.file_size or 0
+        if not (message.document.mime_type or "").startswith("image/"):
+            await message.answer("⚠️ Bu rasm fayli emas. PNG yoki JPG yuboring 👇")
+            return
+    if size > certs.MAX_LOGO_BYTES:
+        await message.answer("⚠️ Fayl juda katta (5 MB dan oshmasin). Kichikroq rasm yuboring 👇")
+        return
+    try:
+        buf = await message.bot.download(file_id, destination=BytesIO())
+        Image.open(BytesIO(buf.getvalue())).verify()
+    except Exception:
+        await message.answer("⚠️ Rasmni o'qib bo'lmadi. PNG yoki JPG formatida qaytadan yuboring 👇")
+        return
+    await certs.set_value(certs.KEY_LOGO, file_id)
+    await state.clear()
+    await message.answer("✅ Logotip saqlandi.", reply_markup=main_menu(message.from_user.id))
+    text, kb = await _cert_view()
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "adm:clogodel")
+async def cert_logo_delete(callback: CallbackQuery) -> None:
+    await certs.set_value(certs.KEY_LOGO, None)
+    text, kb = await _cert_view()
+    await services.edit_or_send(callback, text, kb)
+    await callback.answer("Logotip o'chirildi.")
+
+
+@router.callback_query(F.data == "adm:csample")
+async def cert_sample(callback: CallbackQuery) -> None:
+    await callback.answer("👁 Namuna tayyorlanmoqda…")
+    await callback.bot.send_chat_action(callback.from_user.id, "upload_photo")
+    png = await certs.sample(callback.bot)
+    await callback.bot.send_photo(
+        callback.from_user.id, BufferedInputFile(png, filename="namuna.png"),
+        caption="👁 <b>Namuna</b> — sertifikat hozirgi sozlamalar bilan shunday ko'rinadi.\n"
+                "<i>Rangi va sarlavhasi natijaga qarab o'zgaradi: 1–3-o'rin — diplom, "
+                "85% dan — a'lo, 60% dan — yaxshi, qolganlar — ishtirokchi.</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⬅️ Sertifikat sozlamalari", callback_data="adm:cert"),
+        ]]),
+    )

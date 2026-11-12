@@ -454,6 +454,10 @@ async def get_submission(test_id: int, user_id: int):
     return await _one("SELECT * FROM submissions WHERE test_id=? AND user_id=?", (test_id, user_id))
 
 
+async def get_submission_by_id(sub_id: int):
+    return await _one("SELECT * FROM submissions WHERE id=?", (sub_id,))
+
+
 async def submissions_ranked(test_id: int, limit: int | None = None) -> list:
     sql = (
         "SELECT s.*, u.username FROM submissions s LEFT JOIN users u ON u.id=s.user_id "

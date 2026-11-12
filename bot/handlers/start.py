@@ -11,7 +11,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from .. import db, moderation
+from .. import certs, db, moderation
 from ..keyboards import BTN_BACK, BTN_CANCEL, BTN_HELP, BTN_PROFILE, cancel_kb, home_btn, main_menu
 from ..subscription import PENDING_START
 from . import solve
@@ -115,6 +115,9 @@ async def enter(bot: Bot, state: FSMContext, user) -> None:
         )
         return
     payload = PENDING_START.pop(uid, None)
+    if payload and payload.startswith("cert_"):
+        await bot.send_message(uid, await certs.verify_text(payload[5:]), reply_markup=main_menu(uid))
+        return
     if payload and payload.startswith("test_") and payload[5:].isdigit():
         await bot.send_message(uid, f"👋 Xush kelibsiz, <b>{escape(user['full_name'])}</b>!", reply_markup=main_menu(uid))
         await solve.open_test(bot, state, user, payload[5:])
