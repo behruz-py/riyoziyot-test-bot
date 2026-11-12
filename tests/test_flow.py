@@ -305,7 +305,7 @@ async def features_check():
     out = await msg(S1, f"{t3['code']}*ABCA")
     assert "Javoblaringizni tekshiring" in out, out
     out = await cb(S1, "sv:ok")
-    assert "O'rin" in out and f"rating:{t3['id']}" in last_markup_data(), out
+    assert "O'rin" not in out and f"rating:{t3['id']}" in last_markup_data(), out
     assert "1A✅  2B✅  3C✅  4A❌" in out and "To'g'ri: <b>3 / 4</b> (75%)" in out, out
     assert "👍 Yaxshi natija!" in out and "🕒" not in out and "ball" not in out.lower(), out
     assert "Javoblaringizni" not in out.split("📋")[-1], "natijada ortiqcha matn"
@@ -340,6 +340,14 @@ async def features_check():
     assert "faqat <b>bir marta</b>" in out and "ko'rib chiqish" not in out, out
     out = await msg(S2, "ABCD")
     assert "qabul qilindi" in out and "Javoblaringizni tekshiring" not in out, out
+
+    # --- faol test uchun natijalar posti: joriy natijalar, kalitsiz
+    out = await cb(TEACHER, f"t:rp:{t3['id']}:10:0")
+    assert "joriy natijalar" in out and "To'g'ri javoblar:" not in out and "yakunlangach" in out, out
+    assert not any(d.endswith(":1") and d.startswith("t:rp:") for d in last_markup_data()), last_markup_data()
+    start = len(session.calls)
+    await cb(TEACHER, f"t:rp:{t3['id']}:10:1")  # kalitni majburan so'rash
+    assert "SendMessage" not in names(start) and "yakunlangach" in last_answer_text(start), names(start)
 
     # --- muallif paneli: Excel, ishtirokchilar, kalitni tahrirlash, izoh
     for key in ("excel", "participants", "key_edit", "post_note"):
@@ -1106,6 +1114,27 @@ async def scenario():
     assert "o'chirildi" in out and (await certs.settings())[certs.KEY_ROLE] is None, out
     await cb(ADMIN, "adm:clogodel")
     assert (await certs.settings())[certs.KEY_LOGO] is None
+
+    # --- natijalarni e'lon qilish uchun post
+    out = await cb(TEACHER, f"t:v:{tid}")
+    assert f"t:rp:{tid}:10:0" in last_markup_data(), last_markup_data()
+    out = await cb(TEACHER, f"t:rp:{tid}:10:0")
+    assert "🏆 <b>Algebra &lt;9-sinf&gt; &amp; nazorat</b> — natijalar" in out, out
+    assert "Qatnashchilar: <b>3</b> nafar · 📈 O'rtacha: <b>67%</b>" in out, out
+    assert out.index("🥇 Bobur Mirzo") < out.index("🥈 Aliyev Vali") < out.index("🥉 Ishtirokchi 23"), out  # ismi bekor qilingan
+    assert "To'g'ri javoblar:" not in out and "@test_bot" in out and "Nusxalash" in out, out
+    assert f"t:rp:{tid}:10:1" in last_markup_data() and f"t:rp:{tid}:0:0" not in last_markup_data()  # 3 kishi < 10
+    out = await cb(TEACHER, f"t:rp:{tid}:10:1")
+    assert "🔑 <b>To'g'ri javoblar:</b>" in out and "1A  2B  3C  4D  5A" in out, out
+    assert f"t:rp:{tid}:10:0" in last_markup_data(), "kalitni olib tashlash tugmasi yo'q"
+    post = [m for m in session.calls if type(m).__name__ == "SendMessage" and "natijalar" in (m.text or "")][-1]
+    assert post.reply_markup is None, "postda tugma bo'lmasligi kerak"
+    for data in (f"t:rp:{tid}:10:0", f"t:rp:{tid}:0:1"):  # begona odam
+        start = len(session.calls)
+        await cb(77, data)
+        assert "SendMessage" not in names(start), names(start)
+    out = await cb(TEACHER, f"t:res:{tid}")
+    assert f"t:rp:{tid}:10:0" in last_markup_data(), last_markup_data()
 
     # --- muddatli test + avtomatik yakunlash
     await msg(TEACHER, kb.BTN_CREATE)

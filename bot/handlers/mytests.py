@@ -7,12 +7,12 @@ from html import escape
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import db, features, keyparser as kp, services
 from ..config import ADMIN_IDS, is_admin
-from ..keyboards import BTN_MY_TESTS, flow_kb, home_btn, main_menu, pager
+from ..keyboards import BTN_MY_TESTS, NO_PREVIEW, flow_kb, home_btn, main_menu, pager
 from .create import send_post
 
 router = Router(name="mytests")
@@ -108,6 +108,8 @@ async def _view(test):
     if features.on("key_edit"):
         buttons.append(InlineKeyboardButton(text="✏️ Kalitni tahrirlash", callback_data=f"t:ed:{tid}"))
     buttons.append(InlineKeyboardButton(text="📣 Post (ulashish)", callback_data=f"t:post:{tid}"))
+    if participants:
+        buttons.append(InlineKeyboardButton(text="🏆 Natijalar posti", callback_data=f"t:rp:{tid}:10:0"))
     for k in range(0, len(buttons), 2):
         kb.row(*buttons[k:k + 2])
     if active:
@@ -150,7 +152,78 @@ async def test_results(callback: CallbackQuery, user) -> None:
         lines.append(f"… va yana {total - 50} nafar")
     if features.on("excel"):
         lines += ["", "<i>📥 To'liq ro'yxat va har bir savol tahlili — Excel hisobotda.</i>"]
-    await services.send_long(callback.bot, user["id"], lines)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📣 Natijalarni e'lon qilish uchun post", callback_data=f"t:rp:{test['id']}:10:0"),
+    ]])
+    await services.send_long(callback.bot, user["id"], lines, reply_markup=kb)
+
+
+# ---------------------------------------------------------------- natijalarni e'lon qilish uchun post
+RESULTS_POST_MAX = 50
+
+
+def results_post(test, subs: list, bot_username: str, top: int, with_key: bool) -> str:
+    """Kanalda e'lon qilish uchun natijalar matni. top=0 - hammasi (ko'pi bilan RESULTS_POST_MAX)."""
+    questions = services.questions_of(test)
+    n = len(questions)
+    finished = not services.is_open(test)
+    total = len(subs)
+    limit = min(top or RESULTS_POST_MAX, RESULTS_POST_MAX)
+    average = sum(services.sub_percent(s, n) for s in subs) / total if total else 0
+    lines = [
+        f"🏆 <b>{escape(test['title'])}</b> — " + ("natijalar" if finished else "joriy natijalar"),
+        "",
+        f"👥 Qatnashchilar: <b>{total}</b> nafar · 📈 O'rtacha: <b>{services.pct_text(average)}</b>",
+        "",
+        *[services.rank_line(pos, s, n) for pos, s in enumerate(subs[:limit], start=1)],
+    ]
+    if total > limit:
+        lines.append(f"… va yana {total - limit} nafar")
+    if with_key and finished:
+        lines += ["", "🔑 <b>To'g'ri javoblar:</b>", *services.key_preview(questions)]
+    lines += ["", f"<i>Batafsil natijangiz: @{bot_username} → «📊 Natijalarim»</i>"]
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data.startswith("t:rp:"))
+async def results_post_cb(callback: CallbackQuery, user) -> None:
+    test = await _owned_test(callback, user)
+    if test is None:
+        return
+    _, _, tid, top, key = callback.data.split(":")
+    top, with_key = int(top), key == "1"
+    subs = list(await db.submissions_ranked(test["id"]))
+    if not subs:
+        await callback.answer("Hozircha hech kim javob yubormagan — e'lon qiladigan natija yo'q.", show_alert=True)
+        return
+    finished = not services.is_open(test)
+    if with_key and not finished:
+        await callback.answer("To'g'ri javoblarni faqat test yakunlangach qo'shish mumkin.", show_alert=True)
+        return
+    await callback.answer()
+    me = await callback.bot.me()
+    await callback.bot.send_message(
+        user["id"], results_post(test, subs, me.username, top, with_key), link_preview_options=NO_PREVIEW
+    )
+    kb = InlineKeyboardBuilder()
+    if len(subs) > 10:
+        kb.row(InlineKeyboardButton(text="📋 Hammasini ko'rsatish" if top else "🔝 Faqat eng yaxshi 10 ta",
+                                    callback_data=f"t:rp:{tid}:{0 if top else 10}:{key}"))
+    if finished:
+        kb.row(InlineKeyboardButton(text="➖ To'g'ri javoblarni olib tashlash" if with_key
+                                    else "🔑 To'g'ri javoblarni qo'shish",
+                                    callback_data=f"t:rp:{tid}:{top}:{0 if with_key else 1}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Testga qaytish", callback_data=f"t:v:{tid}"), home_btn())
+    note = "" if finished else (
+        "\n\n<i>Test hali yakunlanmagan — bu joriy natijalar. To'g'ri javoblarni test yakunlangach "
+        "qo'shish mumkin bo'ladi.</i>"
+    )
+    await callback.bot.send_message(
+        user["id"],
+        "👆 <b>Natijalarni e'lon qilish uchun tayyor post.</b>\n\n"
+        "Postni bosib turing → <b>«Nusxalash»</b> (Copy) → kanal yoki guruhingizga joylang." + note,
+        reply_markup=kb.as_markup(),
+    )
 
 
 @router.callback_query(F.data.startswith("t:xl:"))

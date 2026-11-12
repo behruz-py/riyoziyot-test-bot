@@ -9,7 +9,7 @@ from html import escape
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import BufferedInputFile, CallbackQuery
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from . import db, features, keyparser as kp
 from .config import TZ
@@ -235,7 +235,7 @@ def result_lines(test, sub, rank: int, total: int) -> list[str]:
         )
     else:
         lines.append(f"✅ To'g'ri: <b>{sub['correct_count']} / {n}</b> ({pct_text(pct)})")
-    if features.on("rating"):
+    if features.on("show_rank"):
         lines.append(f"🏅 O'rin: <b>{rank} / {total}</b>" + ("" if finished else " (hozircha)"))
     if features.on("show_time"):
         lines.append(f"🕒 {to_local(sub['submitted_at'])}")
@@ -270,7 +270,11 @@ async def finish_and_notify(bot: Bot, test_id: int, auto: bool = False) -> bool:
     subs = list(await db.submissions_ranked(test_id))
     try:
         head = "⏰ Muddat tugadi — test avtomatik yakunlandi." if auto else "🏁 Test yakunlandi."
-        await send_long(bot, test["owner_id"], [head, ""] + ranking_lines(test, subs[:30], len(subs)))
+        post_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📣 Natijalarni e'lon qilish uchun post", callback_data=f"t:rp:{test_id}:10:0"),
+        ]]) if subs else None
+        await send_long(bot, test["owner_id"], [head, ""] + ranking_lines(test, subs[:30], len(subs)),
+                        reply_markup=post_kb)
         if subs and features.on("excel"):
             from .excel import build_report  # og'ir import faqat kerak bo'lganda
 
@@ -310,7 +314,7 @@ async def send_many(bot: Bot, messages: list[tuple[int, str]], reply_markup=None
 async def _notify_participants(bot: Bot, test, subs: list) -> None:
     total = len(subs)
     total_q = len(questions_of(test))
-    rating = features.on("rating")
+    rating = features.on("show_rank")
     messages = []
     for pos, sub in enumerate(subs, start=1):
         pct = sub_percent(sub, total_q)

@@ -14,6 +14,7 @@ Javoblar kaliti asosida test o'tkazadigan Telegram bot (Python 3.11+, aiogram 3,
 - **Reyting**: ball bo'yicha, teng bo'lsa — oldin topshirgan yuqorida. Faqat ishtirokchi, muallif va adminlar ko'radi.
 - **Sertifikat** (PNG): ism, ball, foiz, yakunlangan testda — egallagan o'rin.
 - **Muallif paneli**: natijalar, Excel hisobot (reyting + har bir savol tahlili), kalit, ulashish, yakunlash, o'chirish.
+- **Natijalar posti**: muallif kanalda e'lon qilish uchun natijalar matnini oladi (eng yaxshi 10 ta yoki hammasi, test yakunlangach — to'g'ri javoblar bilan).
 - **Tayyor post**: test yaratilgach muallifga post matni beriladi (test ma'lumoti va testni ochadigan havola). Muallif uni nusxalab kanal yoki guruhiga joylaydi; havola nusxada ham ishlaydi. Muallif postga o'z izohini qo'sha oladi.
 - **Kalitni tahrirlash**: ayrim savollarni tuzatish (`5 B`), butun kalitni qayta kiritish yoki ballarni o'zgartirish. Saqlashdan oldin o'zgarishlar va nechta ishtirokchining bali o'zgarishi ko'rsatiladi; barcha natijalar, reyting va sertifikatlar avtomatik qayta hisoblanadi, ishtirokchilarga xabar yuborish ixtiyoriy.
 - **Majburiy obuna**: bir yoki bir nechta kanal, admin paneldan boshqariladi.
