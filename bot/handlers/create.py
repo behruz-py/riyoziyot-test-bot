@@ -114,7 +114,7 @@ async def _ask_title(bot: Bot, user_id: int) -> None:
         user_id,
         f"📝 <b>{_step('title')}: test nomi</b>\n\n"
         "Testga nom bering — o'quvchilar uni shu nom bilan ko'radi.\n"
-        "<i>Masalan: Algebra 9-sinf, 2-nazorat ishi</i>",
+        "<i>Masalan: Test 1, 6-sinf 2-test</i>",
         reply_markup=flow_kb(placeholder="Test nomi"),
     )
 
